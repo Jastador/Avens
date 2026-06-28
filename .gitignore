@@ -1,0 +1,50 @@
+﻿# Python environment
+.venv/
+__pycache__/
+*.py[cod]
+*$py.class
+
+# Build / packaging
+build/
+dist/
+
+# IDE / local tooling
+.vscode/
+.idea/
+.codex_backups/
+.cache/
+
+# Secrets
+.env
+*.env
+
+# Private local content
+knowledge_base/
+jarvis_training.jsonl
+
+# Runtime databases / local state
+avens_vector_db/
+avens_memory.json
+avens_app_cache.json
+
+# Temporary runtime files
+*.wav
+*.mp3
+*.log
+temp.txt
+ghost_temp.txt
+ghost_output.wav
+output.wav
+temp_screen.png
+screenshot_*.png
+
+# Local AI models and caches
+models/
+voices/
+MisoTTS_Archive/
+*.gguf
+*.safetensors
+
+# OS junk
+.DS_Store
+Thumbs.db
