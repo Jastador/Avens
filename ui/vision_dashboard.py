@@ -126,6 +126,8 @@ class VisionWorker(QThread):
 class VisionDashboard(QFrame):
     """A styled panel that displays the webcam feed and camera controls."""
 
+    NORMAL_SIZE = (670, 545)
+
     def __init__(self, parent=None) -> None:
         super().__init__(parent)
 
@@ -133,6 +135,7 @@ class VisionDashboard(QFrame):
         self._fullscreen_mode = False
         self._last_status = "STANDBY"
         self._reduced_motion = False
+        self._details_enabled = False
 
         self._build_ui()
 
@@ -147,7 +150,7 @@ class VisionDashboard(QFrame):
 
     def _build_ui(self) -> None:
         self.setObjectName("visionDashboard")
-        self.setFixedSize(670, 545)
+        self.setFixedSize(*self.NORMAL_SIZE)
 
         self.setStyleSheet(
             """
@@ -368,6 +371,7 @@ class VisionDashboard(QFrame):
         telemetry_row.addWidget(self.scan_label)
         telemetry_row.addWidget(self.meta_label)
         layout.addWidget(self.telemetry_widget)
+        self.telemetry_widget.hide()
 
         self.controls_widget = QFrame()
         controls = QHBoxLayout(self.controls_widget)
@@ -376,9 +380,10 @@ class VisionDashboard(QFrame):
 
         self.start_button = QPushButton("START CAMERA")
         self.stop_button = QPushButton("STOP CAMERA")
-        self.guide_button = QPushButton("HIDE GUIDE")
+        self.guide_button = QPushButton("GUIDE: ON")
         self.hud_button = QPushButton("MINIMAL HUD")
         self.motion_button = QPushButton("MOTION: FULL")
+        self.details_button = QPushButton("DETAILS: OFF")
 
         self.stop_button.setEnabled(False)
 
@@ -387,18 +392,22 @@ class VisionDashboard(QFrame):
         self.guide_button.clicked.connect(self.toggle_guide)
         self.hud_button.clicked.connect(self.toggle_hud_mode)
         self.motion_button.clicked.connect(self.toggle_reduced_motion)
+        self.details_button.clicked.connect(self.toggle_details)
 
         controls.addWidget(self.start_button)
         controls.addWidget(self.stop_button)
         controls.addWidget(self.guide_button)
         controls.addWidget(self.hud_button)
         controls.addWidget(self.motion_button)
+        controls.addWidget(self.details_button)
         controls.addStretch(1)
         layout.addWidget(self.controls_widget)
 
         self._sync_guide_button()
         self._sync_hud_button()
         self._sync_motion_button()
+        self._sync_details_button()
+        self._sync_details_visibility()
 
     def set_fullscreen_mode(self, enabled: bool) -> None:
         """Switch between dashboard view and camera-only fullscreen."""
@@ -428,8 +437,8 @@ class VisionDashboard(QFrame):
                 self.setGeometry(self.parentWidget().rect())
         else:
             self.header_widget.show()
-            self.telemetry_widget.show()
             self.controls_widget.show()
+            self._sync_details_visibility()
 
             self.camera_feed.setMinimumSize(634, 336)
             self.camera_feed.setSizePolicy(
@@ -438,7 +447,7 @@ class VisionDashboard(QFrame):
             )
 
             self._layout.setContentsMargins(18, 16, 18, 16)
-            self.setFixedSize(670, 545)
+            self.setFixedSize(*self.NORMAL_SIZE)
             self.move(418, 20)
 
         self._sync_runtime_labels()
@@ -446,6 +455,10 @@ class VisionDashboard(QFrame):
     def sync_requested_state(self) -> None:
         """Keep the camera and buttons synced with voice commands."""
         requested = is_vision_requested()
+
+        if requested and not self._runtime_timer.isActive():
+            self._runtime_timer.start()
+
         has_worker = self.worker is not None
 
         if requested and not has_worker:
@@ -481,20 +494,50 @@ class VisionDashboard(QFrame):
         """Return the UI-only motion preference used by the orb renderer."""
         return self._reduced_motion
 
-    def _sync_hud_button(self) -> None:
-        """Reflect the current HUD mode in the dashboard button."""
-        self.hud_button.setText(
-            "STANDARD HUD"
-            if get_vision_hud_mode() == "MINIMAL"
-            else "MINIMAL HUD"
+    def toggle_details(self) -> None:
+        """Toggle optional live telemetry for gesture and scan information."""
+        self._details_enabled = not self._details_enabled
+        self._sync_details_button()
+        self._sync_runtime_labels()
+
+    def is_details_enabled(self) -> bool:
+        """Return whether optional technical telemetry is visible."""
+        return self._details_enabled
+
+    def _sync_details_button(self) -> None:
+        """Display the actual telemetry visibility preference."""
+        self.details_button.setText(
+            "DETAILS: ON"
+            if self._details_enabled
+            else "DETAILS: OFF"
         )
 
+    def _sync_details_visibility(self) -> None:
+        """Show extra telemetry only when the user explicitly enables it."""
+        self.telemetry_widget.setVisible(
+            self._details_enabled
+            and not self._fullscreen_mode
+        )
+
+    def _sync_hud_button(self) -> None:
+        """Reflect the active in-camera overlay style."""
+        detailed_hud = get_vision_hud_mode() == "STANDARD"
+
+        self.hud_button.setText(
+            "HUD: DETAILED"
+            if detailed_hud
+            else "HUD: MINIMAL"
+        )
+
+        self.guide_button.setVisible(detailed_hud)
+        self._sync_guide_button()
+
     def _sync_guide_button(self) -> None:
-        """Keep the button label honest about the current guide state."""
+        """Reflect the gesture-guide state when detailed HUD is active."""
         self.guide_button.setText(
-            "HIDE GUIDE"
+            "GUIDE: ON"
             if is_vision_guide_visible()
-            else "SHOW GUIDE"
+            else "GUIDE: OFF"
         )
 
     def _sync_motion_button(self) -> None:
@@ -510,13 +553,13 @@ class VisionDashboard(QFrame):
         snapshot = mode_controller.snapshot()
 
         if snapshot.camera_mode == "online":
-            mode_text = "ONLINE · GOOGLE LENS"
+            mode_text = "ONLINE LENS"
             mode_tip = (
                 "Online camera mode. Lens Scan uses SerpApi Google Lens "
                 "through a temporary Cloudinary upload."
             )
         else:
-            mode_text = f"LOCAL · {FAST_MODEL_NAME} / {DEEP_MODEL_NAME}"
+            mode_text = "LOCAL CAMERA"
             mode_tip = (
                 "Offline camera mode using the configured local Ollama "
                 "vision models."
@@ -536,7 +579,8 @@ class VisionDashboard(QFrame):
             self.scan_label.setText("SCAN: IDLE")
 
         show_progress = (
-            not self._fullscreen_mode
+            self._details_enabled
+            and not self._fullscreen_mode
             and scan_progress is not None
         )
         self.scan_progress.setVisible(show_progress)
@@ -544,6 +588,7 @@ class VisionDashboard(QFrame):
         if scan_progress is not None:
             self.scan_progress.setValue(round(scan_progress * 100))
         self._sync_result_card()
+        self._sync_details_visibility()
 
     def _sync_result_card(self) -> None:
         """Render one completed camera result without changing camera state."""

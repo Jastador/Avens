@@ -50,7 +50,7 @@ _latest_vision_result: VisionResult | None = None
 vision_active = False
 vision_fullscreen_requested = False
 vision_guide_visible = True
-vision_hud_mode = "STANDARD"
+vision_hud_mode = "MINIMAL"
 vision_scan_state = ""
 vision_scan_progress: float | None = None
 

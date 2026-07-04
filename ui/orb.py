@@ -23,6 +23,7 @@ class Orb(QWidget):
     COMPACT_SIZE = (400, 400)
     VISION_SIZE = (1110, 585)
 
+
     def __init__(self, shared_state):
         super().__init__()
         self.shared_state = shared_state
@@ -109,9 +110,11 @@ class Orb(QWidget):
 
             if requested:
                 self._resize_around_current_center(*self.VISION_SIZE)
-
                 self.vision_dashboard.set_fullscreen_mode(False)
+                self.vision_dashboard.move(418, 20)
+
                 self.vision_dashboard.show()
+
                 self.vision_dashboard.sync_requested_state()
 
             else:
