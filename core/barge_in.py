@@ -1,15 +1,17 @@
 import time
+
 import numpy as np
 import sounddevice as sd
+
 from utils.mic_check import get_active_mic
+from utils.microphone_lock import microphone_lock
+
 
 def listen_for_speech_interrupt(shared_state, threshold=0.012, required_hits=3):
-    """
-    Detects if the user starts speaking while Avens is talking.
-    This is a simple energy-based barge-in detector.
+    """Detect speech while Avens is speaking.
 
-    Warning:
-    If using speakers instead of headphones, Avens' own voice may trigger this.
+    This listener always releases the shared microphone before normal speech
+    recognition or the wake-word listener starts.
     """
     mic_id = get_active_mic()
     hits = 0
@@ -21,7 +23,6 @@ def listen_for_speech_interrupt(shared_state, threshold=0.012, required_hits=3):
             return
 
         # Only detect barge-in while Avens is actually speaking.
-        # Otherwise random mic noise during "thinking" can fake an interrupt.
         if shared_state.get("state") != "speaking":
             hits = 0
             return
@@ -42,18 +43,26 @@ def listen_for_speech_interrupt(shared_state, threshold=0.012, required_hits=3):
             shared_state["interrupt"] = True
 
     try:
-        with sd.InputStream(
-            device=mic_id,
-            samplerate=16000,
-            channels=1,
-            dtype="float32",
-            blocksize=800,
-            callback=callback
-        ):
-            while not shared_state.get("stop_interrupt_listener", False):
-                if shared_state.get("interrupt", False):
-                    break
-                time.sleep(0.05)
+        with microphone_lock:
+            # The main loop may have finished speaking while this background
+            # thread was waiting for the microphone lock.
+            if shared_state.get("stop_interrupt_listener", False):
+                return
 
-    except Exception as e:
-        print(f"⚠️ Barge-in listener failed: {e}")
+            with sd.InputStream(
+                device=mic_id,
+                samplerate=16000,
+                channels=1,
+                dtype="float32",
+                blocksize=800,
+                callback=callback,
+            ):
+                while not shared_state.get("stop_interrupt_listener", False):
+                    if shared_state.get("interrupt", False):
+                        break
+                    time.sleep(0.05)
+
+    except sd.PortAudioError as error:
+        print(f"⚠️ Barge-in audio error: {error}")
+    except Exception as error:
+        print(f"⚠️ Barge-in listener failed: {error}")

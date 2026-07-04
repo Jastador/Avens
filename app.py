@@ -2,6 +2,9 @@ print("APP FILE STARTED")
 
 import os
 import sys
+import time
+
+APP_PROCESS_STARTED_AT = time.perf_counter()
 
 from dotenv import load_dotenv
 
@@ -38,7 +41,7 @@ os.environ["OMP_NUM_THREADS"] = "1"
 os.environ["CT2_VERBOSE"] = "0"
 
 import threading
-import time
+from datetime import datetime
 import re
 import base64
 import requests
@@ -49,6 +52,7 @@ from PIL import Image
 
 # IMPORTANT: Load STT first. Do not import TTS, wake_word, brain, or UI before this.
 from core.stt import listen, init_model
+from core.performance import performance
 
 # These will be loaded after STT is initialized.
 speak = None
@@ -60,42 +64,132 @@ listen_for_wake_word = None
 # UI AND ORCHESTRATION BELOW
 # ==========================================
 
-def run_ui(shared_state):
+def run_ui(shared_state, boot_trace_id=None):
+    ui_import_started_at = time.perf_counter()
+
     from PyQt5.QtWidgets import QApplication
     from ui.orb import Orb
 
+    performance.record_stage(
+        "boot_ui_import_seconds",
+        time.perf_counter() - ui_import_started_at,
+        boot_trace_id,
+    )
+
+    qt_application_started_at = time.perf_counter()
+
     app = QApplication(sys.argv)
+
+    performance.record_stage(
+        "boot_qt_application_create_seconds",
+        time.perf_counter() - qt_application_started_at,
+        boot_trace_id,
+    )
+
+    orb_started_at = time.perf_counter()
+
     orb = Orb(shared_state)
+
+    performance.record_stage(
+        "boot_orb_create_seconds",
+        time.perf_counter() - orb_started_at,
+        boot_trace_id,
+    )
+
+    ui_show_started_at = time.perf_counter()
+
     orb.show()
+
+    performance.record_stage(
+        "boot_ui_show_request_seconds",
+        time.perf_counter() - ui_show_started_at,
+        boot_trace_id,
+    )
+
+    performance.mark(
+        "boot_ui_show_requested",
+        boot_trace_id,
+        only_once=True,
+    )
+
+    if boot_trace_id is not None:
+        performance.finish(
+            boot_trace_id,
+            outcome="ui_shown",
+        )
+
     sys.exit(app.exec_())
 
-# SHARED STATE (with UI Visibility included)
+def load_runtime_modules(boot_trace_id=None):
+    global speak, get_response, execute_command, listen_for_wake_word
+
+    tts_import_started_at = time.perf_counter()
+
+    from core.tts import speak as _speak
+
+    performance.record_stage(
+        "boot_tts_module_import_seconds",
+        time.perf_counter() - tts_import_started_at,
+        boot_trace_id,
+    )
+
+    brain_import_started_at = time.perf_counter()
+
+    from core.brain import get_response as _get_response
+
+    performance.record_stage(
+        "boot_brain_module_import_seconds",
+        time.perf_counter() - brain_import_started_at,
+        boot_trace_id,
+    )
+
+    commands_import_started_at = time.perf_counter()
+
+    from automation.commands import execute_command as _execute_command
+
+    performance.record_stage(
+        "boot_commands_module_import_seconds",
+        time.perf_counter() - commands_import_started_at,
+        boot_trace_id,
+    )
+
+    wake_import_started_at = time.perf_counter()
+
+    from core.wake_word import (
+        listen_for_wake_word as _listen_for_wake_word,
+    )
+
+    performance.record_stage(
+        "boot_wake_module_import_seconds",
+        time.perf_counter() - wake_import_started_at,
+        boot_trace_id,
+    )
+
+    speak = _speak
+    get_response = _get_response
+    execute_command = _execute_command
+    listen_for_wake_word = _listen_for_wake_word
+
+# ==========================================
+# SHARED RUNTIME STATE
+# ==========================================
+
 shared_state = {
     "state": "idle",
     "interrupt": False,
     "stop_interrupt_listener": False,
     "visible": True,
     "current_spoken_text": "",
-    "paused_response": ""
+    "paused_response": "",
 }
 
-# Conversation attention window.
-# After Avens responds, follow-up speech is treated as intended for Avens for this many seconds.
+# After Avens responds, follow-up speech is treated as intended for Avens
+# for this many seconds.
 conversation_until = 0
 CONVERSATION_TIMEOUT = 8
 
-def load_runtime_modules():
-    global speak, get_response, execute_command, listen_for_wake_word
-
-    from core.tts import speak as _speak
-    from core.brain import get_response as _get_response
-    from automation.commands import execute_command as _execute_command
-    from core.wake_word import listen_for_wake_word as _listen_for_wake_word
-
-    speak = _speak
-    get_response = _get_response
-    execute_command = _execute_command
-    listen_for_wake_word = _listen_for_wake_word
+# How long the user must hold an object inside the scan box.
+LENS_CAPTURE_HOLD_SECONDS = 1.6
 
 def is_tool_allowed_for_prompt(tag, user_input):
     tag_l = tag.lower()
@@ -183,11 +277,539 @@ def is_resume_request(text):
     ))
 
 def is_cancel_resume(text):
-    t = text.lower().strip()
-    return bool(re.search(
-        r"\b(no|stop|leave it|forget it|never mind|drop it|not now)\b",
-        t
-    ))
+    """Return True only for a standalone request to abandon paused speech.
+
+    A substring check made commands such as ``stop vision`` cancel a paused
+    answer instead of reaching the Vision command router.
+    """
+    normalized = " ".join(text.casefold().split())
+    return normalized in {
+        "no",
+        "nope",
+        "stop",
+        "stop it",
+        "leave it",
+        "forget it",
+        "never mind",
+        "drop it",
+        "not now",
+        "don't continue",
+        "do not continue",
+    }
+
+def is_minimal_vision_request(text: str) -> bool:
+    """Recognise natural requests for a cleaner camera view."""
+    normalised = " ".join(text.casefold().split())
+
+    phrases = (
+        "minimal vision",
+        "minimal vision mode",
+        "minimal camera",
+        "minimal camera mode",
+        "hide vision hud",
+        "hide the vision hud",
+        "clean vision mode",
+        "make the camera minimal",
+        "make camera minimal",
+        "make the camera a bit minimal",
+        "make camera a bit minimal",
+        "make the camera cleaner",
+        "make camera cleaner",
+        "remove additional info from the camera",
+        "remove the additional info from the camera",
+        "remove extra info from the camera",
+        "remove the extra info from the camera",
+        "hide camera info",
+        "hide the camera info",
+        "hide camera overlay",
+        "remove camera overlay",
+        "make it less cluttered",
+    )
+
+    return any(phrase in normalised for phrase in phrases)
+
+
+def is_standard_vision_request(text: str) -> bool:
+    """Recognise natural requests to restore the detailed camera view."""
+    normalised = " ".join(text.casefold().split())
+
+    phrases = (
+        "show vision hud",
+        "show the vision hud",
+        "standard vision",
+        "standard vision mode",
+        "detailed vision mode",
+        "make the camera normal",
+        "make camera normal",
+        "make it normal again",
+        "bring back camera info",
+        "bring back the camera info",
+        "bring back additional info",
+        "show additional info on the camera",
+        "show extra info on the camera",
+        "show camera information",
+        "show the camera overlay",
+        "bring back the overlay",
+    )
+
+    return any(phrase in normalised for phrase in phrases)
+
+def is_lens_scan_request(text: str) -> bool:
+    """Recognise explicit requests for online Google Lens lookup."""
+    normalised = " ".join(text.casefold().split())
+
+    phrases = (
+        "what am i holding",
+        "what i'm holding",
+        "what im holding",
+        "what i’m holding",
+        "identify this online",
+        "identify what i'm holding online",
+        "identify what i am holding online",
+        "search this online",
+        "scan this online",
+        "google lens this",
+        "search this with lens",
+        "find this online",
+    )
+
+    return any(phrase in normalised for phrase in phrases)
+
+def normalise_mode_phrase(text: str) -> str:
+    """Normalise short voice-mode replies before exact matching."""
+    return re.sub(
+        r"[^a-z0-9 ]+",
+        "",
+        " ".join(text.casefold().split()),
+    ).strip()
+
+def get_local_time_reply(text: str) -> str | None:
+    """Return the Windows local time for clear time requests."""
+    normalised = normalise_mode_phrase(text)
+
+    time_phrases = {
+        "what time is it",
+        "what is the time",
+        "whats the time",
+        "whats the current time",
+        "what is the current time",
+        "tell me the time",
+        "tell me what time it is",
+        "tell me the current time",
+        "current time",
+        "the current time",
+        "time please",
+    }
+
+    if normalised not in time_phrases:
+        return None
+
+    now = datetime.now().astimezone()
+
+    hour = now.hour % 12 or 12
+    period = "AM" if now.hour < 12 else "PM"
+
+    return f"It is {hour}:{now.minute:02d} {period}, sir."
+
+def get_acknowledgement_reply(text: str) -> str | None:
+    """Handle short conversational acknowledgements without Ollama."""
+    normalised = normalise_mode_phrase(text)
+
+    replies = {
+        "yeah": "Understood, sir.",
+        "yes": "Understood, sir.",
+        "yep": "Understood, sir.",
+        "okay": "Alright, sir.",
+        "ok": "Alright, sir.",
+        "alright": "Alright, sir.",
+        "got it": "Good.",
+        "cool": "Noted, sir.",
+        "thanks": "You're welcome, sir.",
+        "thank you": "You're welcome, sir.",
+    }
+
+    return replies.get(normalised)
+
+def is_short_mode_reply(
+    normalised: str,
+    choices: set[str],
+) -> bool:
+    """Match a short mode reply while tolerating extra trailing words."""
+    if normalised in choices:
+        return True
+
+    return any(
+        normalised.startswith(f"{choice} ")
+        or normalised.endswith(f" {choice}")
+        for choice in choices
+    )
+
+def get_mode_change_target(text: str) -> str | None:
+    """Recognise an explicit request to change Avens online/offline mode."""
+    normalised = normalise_mode_phrase(text)
+
+    online_phrases = {
+        "go online",
+        "switch online",
+        "switch to online",
+        "turn online",
+        "go into online mode",
+    }
+
+    offline_phrases = {
+        "go offline",
+        "switch offline",
+        "switch to offline",
+        "turn offline",
+        "go local",
+        "switch to local",
+        "go into offline mode",
+    }
+
+    if any(phrase in normalised for phrase in online_phrases):
+        return "online"
+
+    if any(phrase in normalised for phrase in offline_phrases):
+        return "offline"
+
+    return None
+
+def get_mode_scope_choice(text: str) -> str | None:
+    """Map a short follow-up to brain, camera, or both."""
+    normalised = normalise_mode_phrase(text)
+
+    brain_choices = {
+        "brain",
+        "the brain",
+        "ai brain",
+        "assistant brain",
+    }
+
+    camera_choices = {
+        "camera",
+        "the camera",
+        "vision",
+        "camera mode",
+    }
+
+    both_choices = {
+        "both",
+        "both systems",
+        "everything",
+        "all",
+    }
+
+    if is_short_mode_reply(normalised, brain_choices):
+        return "brain"
+
+    if is_short_mode_reply(normalised, camera_choices):
+        return "camera"
+
+    if is_short_mode_reply(normalised, both_choices):
+        return "both"
+
+    return None
+
+def get_brain_provider_choice(text: str) -> str | None:
+    """Map a short spoken follow-up to one online brain provider."""
+    normalised = normalise_mode_phrase(text)
+
+    gpt_choices = {
+        "gpt",
+        "g p t",
+        "openai",
+        "chatgpt",
+        "chat gpt",
+        "use gpt",
+        "use openai",
+    }
+
+    gemini_choices = {
+        "gemini",
+        "gemini ai",
+        "gemini please",
+        "use gemini",
+        "jim and i",
+        "geminy",
+    }
+
+    if is_short_mode_reply(normalised, gpt_choices):
+        return "gpt"
+
+    if is_short_mode_reply(normalised, gemini_choices):
+        return "gemini"
+
+    return None
+
+def is_mode_status_request(text: str) -> bool:
+    """Recognise requests to report the active brain and camera modes."""
+    normalised = normalise_mode_phrase(text)
+
+    phrases = {
+        "mode status",
+        "what mode are you in",
+        "what modes are active",
+        "what is online",
+        "what is offline",
+        "system mode",
+        "system status",
+    }
+
+    return normalised in phrases
+
+def get_camera_intelligence_request(text: str) -> str | None:
+    """Map clear spoken requests to one approved camera-analysis mode."""
+    normalised = " ".join(text.casefold().split())
+
+    read_phrases = (
+        "read this",
+        "can you read this",
+        "could you read this",
+        "read what i'm holding",
+        "read what i am holding",
+        "what does this say",
+        "read the text",
+        "read this for me",
+    )
+
+    identify_phrases = (
+        "what am i holding",
+        "what i am holding",
+        "what is this",
+        "what am i showing you",
+        "what i am showing you",
+        "what is in my hand",
+        "what's in my hand",
+        "identify this",
+        "identify what i'm holding",
+        "identify what i am holding",
+    )
+
+    describe_phrases = (
+        "describe this",
+        "describe what you see",
+        "what do you see",
+        "can you see this",
+        "look at this",
+        "describe the camera view",
+    )
+
+    if any(phrase in normalised for phrase in read_phrases):
+        return "read"
+
+    if any(phrase in normalised for phrase in identify_phrases):
+        return "identify"
+
+    if any(phrase in normalised for phrase in describe_phrases):
+        return "describe"
+
+    return None
+
+def capture_requested_camera_frame(
+    hold_seconds: float = 0.0,
+    on_progress=None,
+):
+    """Get one settled camera frame, optionally holding for a scan countdown."""
+    from core.live_frame_buffer import live_frame_buffer
+    from core.vision import (
+        is_vision_requested,
+        start_vision,
+        stop_vision,
+    )
+
+    trace_id = performance.current_trace_id()
+    owns_trace = trace_id is None
+
+    if owns_trace:
+        trace_id = performance.begin(
+            "camera_frame_capture",
+            metadata={
+                "hold_target_seconds": hold_seconds,
+            },
+        )
+
+    span_id = performance.begin_span(
+        "camera_frame_capture",
+        trace_id,
+        metadata={
+            "hold_target_seconds": hold_seconds,
+        },
+    )
+
+    capture_started_at = time.perf_counter()
+    hold_started_at = None
+    outcome = "ok"
+
+    vision_was_already_running = is_vision_requested()
+    requested_at = time.monotonic()
+
+    performance.add_metadata(
+        {
+            "camera_vision_already_running": vision_was_already_running,
+        },
+        trace_id,
+    )
+
+    if not vision_was_already_running:
+        vision_start_started_at = time.perf_counter()
+
+        print("📷 Starting Vision for one requested analysis frame.")
+        start_vision()
+
+        performance.record_stage(
+            "camera_vision_start_request_seconds",
+            time.perf_counter() - vision_start_started_at,
+            trace_id,
+        )
+
+    try:
+        fresh_frame_wait_started_at = time.perf_counter()
+
+        first_frame = live_frame_buffer.wait_for_frame(
+            timeout_seconds=6.0,
+            newer_than=requested_at,
+        )
+
+        performance.record_stage(
+            "camera_wait_for_fresh_frame_seconds",
+            time.perf_counter() - fresh_frame_wait_started_at,
+            trace_id,
+        )
+
+        if first_frame is None:
+            outcome = "no_fresh_frame"
+            return None
+
+        performance.mark(
+            "camera_first_fresh_frame_received",
+            trace_id,
+            only_once=True,
+        )
+
+        autofocus_started_at = time.perf_counter()
+
+        # Let autofocus and exposure stabilise before capturing.
+        time.sleep(0.45)
+
+        performance.record_stage(
+            "camera_autofocus_settle_seconds",
+            time.perf_counter() - autofocus_started_at,
+            trace_id,
+        )
+
+        if hold_seconds <= 0:
+            settled_frame = live_frame_buffer.get_latest(
+                max_age_seconds=1.0,
+            )
+
+            selected_frame = (
+                settled_frame
+                if settled_frame is not None
+                else first_frame
+            )
+
+            height, width = selected_frame.shape[:2]
+
+            performance.add_metric(
+                "camera_captured_width",
+                width,
+                trace_id,
+            )
+
+            performance.add_metric(
+                "camera_captured_height",
+                height,
+                trace_id,
+            )
+
+            performance.mark(
+                "camera_frame_ready",
+                trace_id,
+                only_once=True,
+            )
+
+            return selected_frame
+
+        hold_started_at = time.perf_counter()
+
+        latest_frame = live_frame_buffer.get_latest(
+            max_age_seconds=1.0,
+        )
+
+        if latest_frame is None:
+            latest_frame = first_frame
+
+        while True:
+            elapsed = time.perf_counter() - hold_started_at
+            progress = min(1.0, elapsed / hold_seconds)
+
+            if on_progress is not None:
+                on_progress(progress)
+
+            current_frame = live_frame_buffer.get_latest(
+                max_age_seconds=1.0,
+            )
+
+            if current_frame is not None:
+                latest_frame = current_frame
+
+            if progress >= 1.0:
+                height, width = latest_frame.shape[:2]
+
+                performance.add_metric(
+                    "camera_captured_width",
+                    width,
+                    trace_id,
+                )
+
+                performance.add_metric(
+                    "camera_captured_height",
+                    height,
+                    trace_id,
+                )
+
+                performance.mark(
+                    "camera_frame_ready",
+                    trace_id,
+                    only_once=True,
+                )
+
+                return latest_frame
+
+            time.sleep(0.04)
+
+    except Exception:
+        outcome = "capture_error"
+        raise
+
+    finally:
+        if hold_started_at is not None:
+            performance.record_stage(
+                "camera_hold_seconds",
+                time.perf_counter() - hold_started_at,
+                trace_id,
+            )
+
+        performance.record_stage(
+            "camera_total_capture_seconds",
+            time.perf_counter() - capture_started_at,
+            trace_id,
+        )
+
+        performance.finish_span(
+            span_id,
+            outcome=outcome,
+        )
+
+        if not vision_was_already_running:
+            print("📷 One-frame capture complete. Stopping Vision.")
+            stop_vision()
+
+        if owns_trace:
+            performance.finish(
+                trace_id,
+                outcome=outcome,
+            )
 
 def speak_with_barge(text, pause_text=None):
     global conversation_until
@@ -207,7 +829,11 @@ def speak_with_barge(text, pause_text=None):
 
     completed = speak(text, shared_state)
 
+    # Tell the microphone listener to exit, then wait briefly so the next
+    # STT/wake listener cannot race it for the same microphone device.
     shared_state["stop_interrupt_listener"] = True
+    if interrupt_thread.is_alive():
+        interrupt_thread.join(timeout=1.0)
 
     if completed is False or shared_state.get("interrupt"):
         print("⚠️ Resume speech interrupted by user.")
@@ -228,6 +854,13 @@ def avens_loop():
         print("Loop running...")
         just_interrupted = False
         while True:
+            previous_turn_trace_id = performance.current_trace_id()
+
+            if previous_turn_trace_id is not None:
+                performance.finish(
+                    previous_turn_trace_id,
+                    outcome="ok",
+                )
             # Reset interrupt flag at the start of a new listening cycle
             shared_state["interrupt"] = False
 
@@ -242,7 +875,14 @@ def avens_loop():
             # If no active session exists, require wake word
             if not started_in_active_window:
                 shared_state["state"] = "listening"
-                listen_for_wake_word()
+                wake_detected = listen_for_wake_word()
+
+                # A recoverable microphone error must not make Avens answer as
+                # though a wake phrase was heard. Retry the normal wake loop.
+                if not wake_detected:
+                    shared_state["state"] = "idle"
+                    time.sleep(0.25)
+                    continue
 
                 # Wake word grants an active conversation window
                 conversation_until = time.time() + CONVERSATION_TIMEOUT
@@ -250,12 +890,16 @@ def avens_loop():
 
                 shared_state["state"] = "speaking"
                 speak("Yes Sir?", shared_state)
+
+                # Start the full follow-up window after Avens finishes speaking.
+                conversation_until = time.time() + CONVERSATION_TIMEOUT
             else:
                 print("🟡 Follow-up window active. Listening without wake word...")
 
             shared_state["state"] = "listening"
 
-            # If Avens was interrupted mid-speech, wait until user stops for 3 seconds
+            # If Avens was interrupted, allow more silence before deciding
+            # the next speech turn has ended.
             if was_interrupted:
                 if shared_state.get("paused_response"):
                     shared_state["state"] = "speaking"
@@ -265,9 +909,55 @@ def avens_loop():
                     shared_state["stop_interrupt_listener"] = True
 
                 shared_state["state"] = "listening"
-                user_input = listen(silence_limit=3.0, max_duration=20)
+                listen_silence_limit = 3.0
+                listen_max_duration = 20
             else:
-                user_input = listen(silence_limit=1.8, max_duration=15)
+                # Short commands should feel responsive, while still allowing
+                # a natural brief pause inside a sentence.
+                listen_silence_limit = 1.5
+
+                # Do not keep the microphone occupied for 15 seconds after a reply
+                # when the conversation window itself is only 8 seconds.
+                remaining_follow_up_seconds = max(
+                    1.0,
+                    conversation_until - time.time(),
+                )
+
+                listen_max_duration = min(
+                    15.0,
+                    remaining_follow_up_seconds,
+                )
+
+            turn_trace_id = performance.begin(
+                "voice_turn",
+                metadata={
+                    "follow_up_turn": started_in_active_window,
+                    "after_interruption": was_interrupted,
+                    "silence_limit_seconds": listen_silence_limit,
+                },
+            )
+
+            performance.mark(
+                "turn_listen_requested",
+                turn_trace_id,
+                only_once=True,
+            )
+
+            user_input = listen(
+                silence_limit=listen_silence_limit,
+                max_duration=listen_max_duration,
+            )
+
+            performance.mark(
+                "transcript_received",
+                turn_trace_id,
+                only_once=True,
+            )
+
+            performance.add_prompt_metadata(
+                user_input,
+                turn_trace_id,
+            )
 
             print("DEBUG USER INPUT:", user_input)
 
@@ -297,6 +987,13 @@ def avens_loop():
             conversation_until = time.time() + CONVERSATION_TIMEOUT
 
             lower_input = user_input.lower().strip()
+            routing_started_at = time.perf_counter()
+
+            performance.mark(
+                "intent_routing_started",
+                turn_trace_id,
+                only_once=True,
+            )
             paused_raw = shared_state.get("paused_response", "")
 
             if not isinstance(paused_raw, str):
@@ -398,6 +1095,218 @@ def avens_loop():
                 continue
 
             # ---------------------------------------------
+            # RUNTIME MODE CONTROLLER
+            # ---------------------------------------------
+            from core.mode_controller import mode_controller
+
+            mode_state = mode_controller.snapshot()
+
+            if mode_state.pending_choice != "none":
+                cancel_phrases = {
+                    "cancel",
+                    "cancel that",
+                    "never mind",
+                    "forget it",
+                    "not now",
+                }
+
+                if lower_input in cancel_phrases:
+                    mode_controller.cancel_pending_change()
+
+                    shared_state["state"] = "speaking"
+                    speak(
+                        "Mode change cancelled. Staying with the current configuration, sir.",
+                        shared_state,
+                    )
+
+                    conversation_until = time.time() + CONVERSATION_TIMEOUT
+                    shared_state["state"] = "idle"
+                    continue
+
+                if mode_state.pending_choice == "choose_scope":
+                    scope = get_mode_scope_choice(lower_input)
+
+                    if scope is None:
+                        shared_state["state"] = "speaking"
+                        speak(
+                            "Choose brain, camera, or both, sir.",
+                            shared_state,
+                        )
+
+                        conversation_until = (
+                            time.time() + CONVERSATION_TIMEOUT
+                        )
+                        shared_state["state"] = "idle"
+                        continue
+
+                    try:
+                        needs_provider = mode_controller.choose_scope(scope)
+                    except (RuntimeError, ValueError) as error:
+                        print(f"⚠️ Mode scope error: {error}")
+
+                        shared_state["state"] = "speaking"
+                        speak(
+                            "That mode change did not complete. Please try again, sir.",
+                            shared_state,
+                        )
+
+                        conversation_until = (
+                            time.time() + CONVERSATION_TIMEOUT
+                        )
+                        shared_state["state"] = "idle"
+                        continue
+
+                    if needs_provider:
+                        shared_state["state"] = "speaking"
+                        speak(
+                            "For the online brain, choose GPT or Gemini, sir.",
+                            shared_state,
+                        )
+
+                    else:
+                        updated_state = mode_controller.snapshot()
+
+                        shared_state["state"] = "speaking"
+                        speak(
+                            mode_controller.get_status_text(),
+                            shared_state,
+                        )
+
+                    conversation_until = time.time() + CONVERSATION_TIMEOUT
+                    shared_state["state"] = "idle"
+                    continue
+
+                if mode_state.pending_choice == "choose_provider":
+                    provider = get_brain_provider_choice(lower_input)
+
+                    if provider is None:
+                        shared_state["state"] = "speaking"
+                        speak(
+                            "Choose GPT or Gemini for the online brain, sir.",
+                            shared_state,
+                        )
+
+                        conversation_until = (
+                            time.time() + CONVERSATION_TIMEOUT
+                        )
+                        shared_state["state"] = "idle"
+                        continue
+
+                    try:
+                        mode_controller.choose_brain_provider(provider)
+                    except (RuntimeError, ValueError) as error:
+                        print(f"⚠️ Brain provider error: {error}")
+
+                        shared_state["state"] = "speaking"
+                        speak(
+                            "That provider change did not complete. Please try again, sir.",
+                            shared_state,
+                        )
+
+                        conversation_until = (
+                            time.time() + CONVERSATION_TIMEOUT
+                        )
+                        shared_state["state"] = "idle"
+                        continue
+
+                    shared_state["state"] = "speaking"
+                    speak(
+                        mode_controller.get_status_text(),
+                        shared_state,
+                    )
+
+                    conversation_until = time.time() + CONVERSATION_TIMEOUT
+                    shared_state["state"] = "idle"
+                    continue
+
+            if is_mode_status_request(lower_input):
+                shared_state["state"] = "speaking"
+                speak(
+                    mode_controller.get_status_text(),
+                    shared_state,
+                )
+
+                conversation_until = time.time() + CONVERSATION_TIMEOUT
+                shared_state["state"] = "idle"
+                continue
+
+            target_mode = get_mode_change_target(lower_input)
+
+            if target_mode is not None:
+                mode_controller.begin_mode_change(target_mode)
+
+                shared_state["state"] = "speaking"
+                speak(
+                    f"Which system should go {target_mode}: brain, camera, or both?",
+                    shared_state,
+                )
+
+                conversation_until = time.time() + CONVERSATION_TIMEOUT
+                shared_state["state"] = "idle"
+                continue
+
+            local_time_reply = get_local_time_reply(lower_input)
+
+            if local_time_reply is not None:
+                print("⏰ Using local Windows clock.")
+
+                performance.record_stage(
+                    "intent_routing_seconds",
+                    time.perf_counter() - routing_started_at,
+                    turn_trace_id,
+                )
+
+                performance.mark(
+                    "instant_time_route",
+                    turn_trace_id,
+                    only_once=True,
+                )
+
+                shared_state["state"] = "speaking"
+                speak(
+                    local_time_reply,
+                    shared_state,
+                    performance_label="local_time",
+                )
+
+                conversation_until = (
+                    time.time() + CONVERSATION_TIMEOUT
+                )
+                shared_state["state"] = "idle"
+                continue
+
+            acknowledgement_reply = get_acknowledgement_reply(
+                lower_input,
+            )
+
+            if acknowledgement_reply is not None:
+                print("💬 Using local acknowledgement route.")
+
+                performance.record_stage(
+                    "intent_routing_seconds",
+                    time.perf_counter() - routing_started_at,
+                    turn_trace_id,
+                )
+
+                performance.mark(
+                    "instant_acknowledgement_route",
+                    turn_trace_id,
+                    only_once=True,
+                )
+
+                shared_state["state"] = "speaking"
+                speak(
+                    acknowledgement_reply,
+                    shared_state,
+                    performance_label="acknowledgement",
+                )
+
+                # A brief window is enough after “yeah” or “thanks.”
+                conversation_until = time.time() + 4
+                shared_state["state"] = "idle"
+                continue
+
+            # ---------------------------------------------
             # INSTANT INTENT ROUTING (Bypass the AI)
             # ---------------------------------------------
 
@@ -426,6 +1335,358 @@ def avens_loop():
                 continue
 
             # 3. THE VISION ROUTER
+
+            camera_request = get_camera_intelligence_request(lower_input)
+            camera_mode = mode_controller.snapshot().camera_mode
+
+            use_local_camera = (
+                camera_request in {"describe", "read"}
+                or (
+                    camera_request == "identify"
+                    and camera_mode == "offline"
+                )
+            )
+
+            if use_local_camera:
+                from core.camera_intelligence import analyze_camera_frame
+                from core.vision import (
+                    is_vision_requested,
+                    set_vision_scan_state,
+                    start_vision,
+                    stop_vision,
+                )
+
+                scan_label = {
+                    "identify": "LOCAL IDENTIFY",
+                    "describe": "LOCAL DESCRIBE",
+                    "read": "LOCAL READ",
+                }[camera_request]
+
+                frame = None
+                vision_was_running = is_vision_requested()
+                started_vision_for_local_scan = False
+
+                try:
+                    if not vision_was_running:
+                        start_vision()
+                        started_vision_for_local_scan = True
+
+                    set_vision_scan_state(f"{scan_label}: READY")
+
+                    shared_state["state"] = "speaking"
+                    speak(
+                        "Center it in the yellow box and hold still.",
+                        shared_state,
+                        performance_label="camera_instruction",
+                    )
+
+                    def update_local_capture_progress(
+                        progress: float,
+                    ) -> None:
+                        set_vision_scan_state(
+                            f"{scan_label}: HOLD STILL",
+                            progress,
+                        )
+
+                    set_vision_scan_state(
+                        f"{scan_label}: HOLD STILL",
+                        0.0,
+                    )
+
+                    shared_state["state"] = "thinking"
+                    frame = capture_requested_camera_frame(
+                        hold_seconds=LENS_CAPTURE_HOLD_SECONDS,
+                        on_progress=update_local_capture_progress,
+                    )
+
+                    if frame is None:
+                        raise RuntimeError(
+                            "I could not capture a fresh camera frame in time."
+                        )
+
+                    set_vision_scan_state(
+                        f"{scan_label}: CAPTURED",
+                        1.0,
+                    )
+
+                    time.sleep(0.65)
+
+                    set_vision_scan_state(
+                        f"{scan_label}: ANALYZING OFFLINE",
+                    )
+
+                    print(
+                        "🔒 Running local camera analysis "
+                        f"({camera_request})."
+                    )
+
+                    answer = str(
+                        analyze_camera_frame(
+                            frame,
+                            camera_request,
+                        )
+                    ).strip()
+
+                    if not answer:
+                        raise RuntimeError(
+                            "The local vision model returned no answer."
+                        )
+
+                    shared_state["state"] = "speaking"
+                    speak(
+                        answer,
+                        shared_state,
+                        performance_label="camera_result",
+                    )
+                except Exception as error:
+                    print(f"⚠️ Local camera analysis error: {error}")
+
+                    shared_state["state"] = "speaking"
+                    speak(
+                        "Local camera analysis failed. "
+                        "Make sure Ollama is running, sir.",
+                        shared_state,
+                        performance_label="camera_error",
+                    )
+
+                finally:
+                    frame = None
+                    set_vision_scan_state("")
+
+                    if started_vision_for_local_scan:
+                        stop_vision()
+
+                    conversation_until = (
+                        time.time() + CONVERSATION_TIMEOUT
+                    )
+                    shared_state["state"] = "idle"
+
+                continue
+
+            if (
+                camera_mode == "online"
+                and (
+                    camera_request == "identify"
+                    or is_lens_scan_request(lower_input)
+                )
+            ):
+                from core.lens_scan import (
+                    LensScanError,
+                    format_lens_match_for_speech,
+                    scan_frame_with_google_lens,
+                )
+                from core.vision import (
+                    is_vision_requested,
+                    set_vision_scan_state,
+                    start_vision,
+                    stop_vision,
+                )
+
+                frame = None
+                vision_was_running = is_vision_requested()
+                started_vision_for_lens = False
+
+                try:
+                    # Start Vision before speaking so the yellow scan box is visible.
+                    if not vision_was_running:
+                        start_vision()
+                        started_vision_for_lens = True
+
+                    set_vision_scan_state("LENS SCAN: READY")
+
+                    shared_state["state"] = "speaking"
+                    speak(
+                        "Center it in the yellow box and hold still.",
+                        shared_state,
+                        performance_label="lens_error",
+                    )
+
+                    def update_lens_capture_progress(progress: float) -> None:
+                        set_vision_scan_state(
+                            "LENS SCAN: HOLD STILL",
+                            progress,
+                        )
+
+                    set_vision_scan_state(
+                        "LENS SCAN: HOLD STILL",
+                        0.0,
+                    )
+
+                    shared_state["state"] = "thinking"
+                    frame = capture_requested_camera_frame(
+                        hold_seconds=LENS_CAPTURE_HOLD_SECONDS,
+                        on_progress=update_lens_capture_progress,
+                    )
+
+                    if frame is None:
+                        raise LensScanError(
+                            "I could not capture a fresh camera frame in time."
+                        )
+
+                    set_vision_scan_state(
+                        "CAPTURED - YOU CAN LOWER IT",
+                        1.0,
+                    )
+
+                    time.sleep(0.65)
+
+                    set_vision_scan_state("LENS SCAN: SEARCHING ONLINE")
+
+                    print("🔎 Running one online Google Lens search.")
+                    match = scan_frame_with_google_lens(frame)
+
+                    shared_state["state"] = "speaking"
+                    speak(
+                        format_lens_match_for_speech(match),
+                        shared_state,
+                        performance_label="lens_error",
+                    )
+
+                except LensScanError as error:
+                    print(f"⚠️ Lens Scan error: {error}")
+
+                    shared_state["state"] = "speaking"
+                    speak(
+                        f"Online Lens Scan failed. {error}",
+                        shared_state,
+                    )
+
+                except Exception as error:
+                    print(f"⚠️ Unexpected Lens Scan error: {error}")
+
+                    shared_state["state"] = "speaking"
+                    speak(
+                        "The online Lens Scan failed unexpectedly, sir.",
+                        shared_state,
+                    )
+
+                finally:
+                    frame = None
+                    set_vision_scan_state("")
+
+                    if started_vision_for_lens:
+                        stop_vision()
+
+                    conversation_until = time.time() + CONVERSATION_TIMEOUT
+                    shared_state["state"] = "idle"
+
+                continue
+
+            elif is_minimal_vision_request(lower_input):
+                from core.vision import set_vision_hud_mode
+
+                set_vision_hud_mode("MINIMAL")
+
+                shared_state["state"] = "speaking"
+                speak("Cleaning up the camera feed, sir.", shared_state)
+                conversation_until = time.time() + CONVERSATION_TIMEOUT
+                shared_state["state"] = "idle"
+                continue
+
+            elif is_standard_vision_request(lower_input):
+                from core.vision import set_vision_hud_mode
+
+                set_vision_hud_mode("STANDARD")
+
+                shared_state["state"] = "speaking"
+                speak("Bringing the full camera interface back, sir.", shared_state)
+                conversation_until = time.time() + CONVERSATION_TIMEOUT
+                shared_state["state"] = "idle"
+                continue
+
+            elif any(
+                phrase in lower_input
+                for phrase in [
+                    "hide gesture guide",
+                    "hide the gesture guide",
+                    "hide vision guide",
+                    "remove gesture guide",
+                ]
+            ):
+                from core.vision import set_vision_guide_visible
+
+                set_vision_guide_visible(False)
+
+                shared_state["state"] = "speaking"
+                speak("Gesture guide hidden, sir.", shared_state)
+                conversation_until = time.time() + CONVERSATION_TIMEOUT
+                shared_state["state"] = "idle"
+                continue
+
+            elif any(
+                phrase in lower_input
+                for phrase in [
+                    "show gesture guide",
+                    "show the gesture guide",
+                    "show vision guide",
+                ]
+            ):
+                from core.vision import set_vision_guide_visible
+
+                set_vision_guide_visible(True)
+
+                shared_state["state"] = "speaking"
+                speak("Gesture guide restored, sir.", shared_state)
+                conversation_until = time.time() + CONVERSATION_TIMEOUT
+                shared_state["state"] = "idle"
+                continue
+
+            elif any(
+                phrase in lower_input
+                for phrase in [
+                    "full screen camera",
+                    "fullscreen camera",
+                    "full screen webcam",
+                    "fullscreen webcam",
+                    "full screen vision",
+                    "fullscreen vision",
+                    "maximize vision",
+                    "maximize camera",
+                    "expand camera",
+                ]
+            ):
+                from core.vision import request_vision_fullscreen
+
+                request_vision_fullscreen()
+
+                shared_state["state"] = "speaking"
+                speak(
+                    "Expanding the camera feed. The orb is stepping aside, sir.",
+                    shared_state,
+                )
+                conversation_until = time.time() + CONVERSATION_TIMEOUT
+                shared_state["state"] = "idle"
+                continue
+
+            elif any(
+                phrase in lower_input
+                for phrase in [
+                    "normal vision",
+                    "normal camera",
+                    "restore vision",
+                    "restore camera",
+                    "exit full screen",
+                    "exit fullscreen",
+                    "leave full screen",
+                    "leave fullscreen",
+                    "shrink camera",
+                    "back to normal",
+                    "back to normal please",
+                ]
+            ):
+                from core.vision import restore_vision_layout
+
+                restore_vision_layout()
+
+                shared_state["state"] = "speaking"
+                speak(
+                    "Restoring the normal vision layout, sir.",
+                    shared_state,
+                )
+                conversation_until = time.time() + CONVERSATION_TIMEOUT
+                shared_state["state"] = "idle"
+                continue
+
             elif any(phrase in lower_input for phrase in ["can you see me", "watch me", "check me out", "turn on camera", "start vision", "open your eyes"]):
                 from core.vision import start_vision
                 start_vision()
@@ -434,6 +1695,7 @@ def avens_loop():
                 conversation_until = time.time() + CONVERSATION_TIMEOUT
                 shared_state["state"] = "idle"
                 continue
+
             elif any(phrase in lower_input for phrase in ["stop looking", "turn off camera", "go blind", "stop vision", "close your eyes", "stop watching me", "close the cam"]):
                 from core.vision import stop_vision
                 stop_vision()
@@ -496,6 +1758,17 @@ def avens_loop():
                 conversation_until = time.time() + CONVERSATION_TIMEOUT
                 continue # 🛑 THIS CRITICAL LINE STOPS AVENS FROM HALLUCINATING
 
+            performance.record_stage(
+                "intent_routing_seconds",
+                time.perf_counter() - routing_started_at,
+                turn_trace_id,
+            )
+
+            performance.mark(
+                "brain_dispatch_started",
+                turn_trace_id,
+                only_once=True,
+            )
             # ---------------------------------------------
             # REAL-TIME STREAMING & COMMAND EXECUTION LOGIC
             # ---------------------------------------------
@@ -578,7 +1851,11 @@ def avens_loop():
                         shared_state["state"] = "speaking"
                         shared_state["current_spoken_text"] = clean_sentence
 
-                        completed = speak(clean_sentence, shared_state)
+                        completed = speak(
+                            clean_sentence,
+                            shared_state,
+                            performance_label="brain_response",
+                        )
 
                         if completed is False or shared_state.get("interrupt"):
                             shared_state["paused_response"] = clean_sentence
@@ -591,13 +1868,17 @@ def avens_loop():
                         shared_state["state"] = "thinking"
                         has_spoken_anything = True
 
+            # Stop the background microphone listener before the next listen()
+            # cycle begins. Without this join, Windows can receive two competing
+            # sounddevice input streams and report "Stream is stopped".
+            shared_state["stop_interrupt_listener"] = True
+            if interrupt_thread.is_alive():
+                interrupt_thread.join(timeout=1.0)
+
             if shared_state.get("interrupt"):
                 print("⚠️ Speech was interrupted by user.")
                 just_interrupted = True
                 conversation_until = time.time() + CONVERSATION_TIMEOUT
-
-            # Stop tracking the interruption state for this turn
-            shared_state["stop_interrupt_listener"] = True
 
             # Fallback if the generator finished but didn't actually produce output or tags
             if not has_spoken_anything and not just_interrupted:
@@ -620,18 +1901,66 @@ def avens_loop():
         traceback.print_exc()
 
 def main():
+    boot_trace_id = performance.begin(
+        "app_boot",
+        metadata={
+            "boundary": "module_import_to_ui_shown",
+        },
+    )
+
+    performance.record_stage(
+        "boot_module_import_to_main_seconds",
+        time.perf_counter() - APP_PROCESS_STARTED_AT,
+        boot_trace_id,
+    )
+
     print("Starting Avens...")
+
+    stt_init_started_at = time.perf_counter()
 
     # Initialize Faster-Whisper before Kokoro, Vosk, ChromaDB, PyQt, etc.
     init_model()
 
-    # Now load the rest of the runtime modules.
-    load_runtime_modules()
+    performance.record_stage(
+        "boot_stt_model_init_seconds",
+        time.perf_counter() - stt_init_started_at,
+        boot_trace_id,
+    )
 
-    threading.Thread(target=avens_loop, daemon=True).start()
+    runtime_modules_started_at = time.perf_counter()
+
+    # Now load the rest of the runtime modules.
+    load_runtime_modules(boot_trace_id)
+
+    performance.record_stage(
+        "boot_runtime_modules_seconds",
+        time.perf_counter() - runtime_modules_started_at,
+        boot_trace_id,
+    )
+
+    loop_thread_started_at = time.perf_counter()
+
+    loop_thread = threading.Thread(
+        target=avens_loop,
+        daemon=True,
+    )
+
+    loop_thread.start()
+
+    performance.record_stage(
+        "boot_loop_thread_start_seconds",
+        time.perf_counter() - loop_thread_started_at,
+        boot_trace_id,
+    )
+
+    performance.mark(
+        "boot_loop_thread_started",
+        boot_trace_id,
+        only_once=True,
+    )
 
     print("Launching UI...")
-    run_ui(shared_state)
+    run_ui(shared_state, boot_trace_id)
 
 if __name__ == "__main__":
     main()
