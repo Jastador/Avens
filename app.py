@@ -195,9 +195,11 @@ def is_tool_allowed_for_prompt(tag, user_input):
     tag_l = tag.lower()
     prompt_l = user_input.lower()
 
-    # Open app only if user actually asked to open/launch/start something
+    # App launching now belongs only to deterministic local skills.
+    # Never let an LLM-generated OPEN tag reach legacy automation.
     if tag_l.startswith("<open:"):
-        return any(w in prompt_l for w in ["open", "launch", "start", "run"])
+        print(f"🚫 Legacy app-launch tag blocked: {tag}")
+        return False
 
     # Research only if user asks for live/latest/current/web/news/price
     if tag_l.startswith("<research:") or tag_l.startswith("<finance:") or tag_l.startswith("<fetch:"):
@@ -1307,6 +1309,49 @@ def avens_loop():
                 continue
 
             # ---------------------------------------------
+            # DETERMINISTIC LOCAL SKILLS
+            # ---------------------------------------------
+            from skills.router import route_local_skill
+
+            local_skill_result = route_local_skill(user_input)
+
+            if (
+                local_skill_result is not None
+                and local_skill_result.handled
+            ):
+                print(
+                    "🧩 Deterministic local skill handled: "
+                    f"{local_skill_result.skill_name}"
+                )
+
+                performance.record_stage(
+                    "intent_routing_seconds",
+                    time.perf_counter() - routing_started_at,
+                    turn_trace_id,
+                )
+
+                performance.mark(
+                    "local_skill_route",
+                    turn_trace_id,
+                    only_once=True,
+                )
+
+                shared_state["state"] = "speaking"
+                speak(
+                    local_skill_result.message,
+                    shared_state,
+                    performance_label=(
+                        f"skill_{local_skill_result.skill_name}"
+                    ),
+                )
+
+                conversation_until = (
+                    time.time() + CONVERSATION_TIMEOUT
+                )
+                shared_state["state"] = "idle"
+                continue
+
+            # ---------------------------------------------
             # INSTANT INTENT ROUTING (Bypass the AI)
             # ---------------------------------------------
 
@@ -1725,9 +1770,17 @@ def avens_loop():
                 continue
 
             # 2. INSTANT GOOGLE SEARCH ROUTER
-            search_match = re.search(r'(?:search for|google|look up|search)\s+(.+)', lower_input)
+            search_match = re.fullmatch(
+                r"\s*"
+                r"(?:(?:can|could|would|will)\s+you\s+)?"
+                r"(?:please\s+)?"
+                r"(?:search(?:\s+for)?|google|look\s+up)\s+"
+                r"(?P<query>.+?)"
+                r"\s*[.!?]*\s*",
+                lower_input,
+            )
             if search_match:
-                query = search_match.group(1).strip()
+                query = search_match.group("query").strip()
                 webbrowser.open(f"https://www.google.com/search?q={query}")
                 shared_state["state"] = "speaking"
                 speak(f"Opening Google to search for {query}, sir.", shared_state)
