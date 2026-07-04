@@ -22,6 +22,7 @@ from core.live_frame_buffer import live_frame_buffer
 from core.mode_controller import mode_controller
 from core.vision import (
     HandVisionProcessor,
+    get_latest_vision_result,
     get_vision_hud_mode,
     get_vision_scan_progress,
     get_vision_scan_state,
@@ -146,7 +147,7 @@ class VisionDashboard(QFrame):
 
     def _build_ui(self) -> None:
         self.setObjectName("visionDashboard")
-        self.setFixedSize(670, 485)
+        self.setFixedSize(670, 545)
 
         self.setStyleSheet(
             """
@@ -217,6 +218,30 @@ class VisionDashboard(QFrame):
                 border-radius: 2px;
             }
 
+            QFrame#visionResultCard {
+                background: rgba(14, 27, 44, 228);
+                border: 1px solid rgba(95, 206, 235, 175);
+                border-radius: 9px;
+            }
+
+            QLabel#resultKind {
+                color: #f5e650;
+                font-size: 10px;
+                font-weight: 700;
+            }
+
+            QLabel#resultText {
+                color: #edf5ff;
+                font-size: 11px;
+                font-weight: 600;
+            }
+
+            QLabel#resultDetail {
+                color: #9ccbea;
+                font-size: 9px;
+                font-weight: 700;
+            }
+
             QPushButton {
                 background: #18233b;
                 border: 1px solid #314765;
@@ -282,6 +307,45 @@ class VisionDashboard(QFrame):
         self.scan_progress.setTextVisible(False)
         self.scan_progress.hide()
         layout.addWidget(self.scan_progress)
+
+        self.result_widget = QFrame()
+        self.result_widget.setObjectName("visionResultCard")
+        self.result_widget.setMinimumHeight(54)
+        self.result_widget.setMaximumHeight(62)
+
+        result_layout = QVBoxLayout(self.result_widget)
+        result_layout.setContentsMargins(10, 7, 10, 7)
+        result_layout.setSpacing(3)
+
+        result_header = QHBoxLayout()
+        result_header.setContentsMargins(0, 0, 0, 0)
+        result_header.setSpacing(8)
+
+        self.result_kind_label = QLabel("RESULT")
+        self.result_kind_label.setObjectName("resultKind")
+
+        self.result_detail_label = QLabel()
+        self.result_detail_label.setObjectName("resultDetail")
+        self.result_detail_label.setAlignment(
+            Qt.AlignRight | Qt.AlignVCenter
+        )
+        self.result_detail_label.setMaximumWidth(220)
+        self.result_detail_label.hide()
+
+        result_header.addWidget(self.result_kind_label)
+        result_header.addStretch(1)
+        result_header.addWidget(self.result_detail_label)
+
+        self.result_text_label = QLabel()
+        self.result_text_label.setObjectName("resultText")
+        self.result_text_label.setWordWrap(True)
+        self.result_text_label.setMaximumHeight(30)
+
+        result_layout.addLayout(result_header)
+        result_layout.addWidget(self.result_text_label)
+
+        self.result_widget.hide()
+        layout.addWidget(self.result_widget)
 
         self.telemetry_widget = QFrame()
         telemetry_row = QHBoxLayout(self.telemetry_widget)
@@ -349,6 +413,7 @@ class VisionDashboard(QFrame):
 
             self.header_widget.hide()
             self.scan_progress.hide()
+            self.result_widget.hide()
             self.telemetry_widget.hide()
             self.controls_widget.hide()
 
@@ -373,7 +438,7 @@ class VisionDashboard(QFrame):
             )
 
             self._layout.setContentsMargins(18, 16, 18, 16)
-            self.setFixedSize(670, 485)
+            self.setFixedSize(670, 545)
             self.move(418, 20)
 
         self._sync_runtime_labels()
@@ -478,6 +543,65 @@ class VisionDashboard(QFrame):
 
         if scan_progress is not None:
             self.scan_progress.setValue(round(scan_progress * 100))
+        self._sync_result_card()
+
+    def _sync_result_card(self) -> None:
+        """Render one completed camera result without changing camera state."""
+        result = get_latest_vision_result()
+
+        if result is None or self._fullscreen_mode:
+            self.result_widget.hide()
+            return
+
+        kind_labels = {
+            "local_identify": "RESULT · LOCAL IDENTIFY",
+            "local_describe": "RESULT · LOCAL DESCRIBE",
+            "local_read": "RESULT · LOCAL READ",
+            "online_google_lens": "RESULT · ONLINE GOOGLE LENS",
+        }
+
+        self.result_kind_label.setText(
+            kind_labels.get(result.kind, "RESULT")
+        )
+        self.result_text_label.setText(
+            self._compact_result_text(result.text, 180)
+        )
+        self.result_text_label.setToolTip(result.text)
+
+        if result.detail:
+            detail = self._compact_result_text(result.detail, 72)
+            self.result_detail_label.setText(f"SOURCE · {detail}")
+            self.result_detail_label.setToolTip(result.detail)
+            self.result_detail_label.show()
+        else:
+            self.result_detail_label.clear()
+            self.result_detail_label.hide()
+
+        if result.kind == "online_google_lens":
+            self.result_widget.setToolTip(
+                "Online Google Lens visual match. "
+                "Treat the exact model as unconfirmed."
+            )
+        else:
+            self.result_widget.setToolTip(
+                "Completed local camera analysis."
+            )
+
+        self.result_widget.show()
+
+
+    @staticmethod
+    def _compact_result_text(value: str, limit: int) -> str:
+        """Keep one UI result concise without changing the spoken answer."""
+        normalised = " ".join(str(value or "").split())
+
+        if len(normalised) <= limit:
+            return normalised
+
+        shortened = normalised[:limit].rsplit(" ", 1)[0]
+        shortened = shortened or normalised[:limit]
+
+        return f"{shortened}..."
 
     def request_start(self) -> None:
         start_vision()

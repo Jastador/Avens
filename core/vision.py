@@ -13,7 +13,8 @@ import os
 from pathlib import Path
 import time
 import urllib.request
-from typing import Any
+from threading import RLock
+from typing import Any, Final
 
 import cv2
 import mediapipe as mp
@@ -24,6 +25,27 @@ from mediapipe.tasks.python import vision
 
 from automation.commands import force_volume_change
 from core.gesture_engine import GestureEngine, GestureSignal
+
+@dataclass(frozen=True)
+class VisionResult:
+    """A completed camera result exposed to the UI without frame data."""
+
+    kind: str
+    text: str
+    detail: str = ""
+
+
+VISION_RESULT_KINDS: Final[frozenset[str]] = frozenset(
+    {
+        "local_identify",
+        "local_describe",
+        "local_read",
+        "online_google_lens",
+    }
+)
+
+_vision_result_lock = RLock()
+_latest_vision_result: VisionResult | None = None
 
 vision_active = False
 vision_fullscreen_requested = False
@@ -77,6 +99,7 @@ def stop_vision() -> None:
     vision_fullscreen_requested = False
     vision_scan_state = ""
     vision_scan_progress = None
+    clear_latest_vision_result()
 
 def request_vision_fullscreen() -> None:
     """Start vision and request a webcam-only full-screen layout."""
@@ -128,6 +151,47 @@ def get_vision_scan_state() -> str:
 def get_vision_scan_progress() -> float | None:
     """Return Lens Scan capture progress, or None when not capturing."""
     return vision_scan_progress
+
+def set_latest_vision_result(
+    kind: str,
+    text: str,
+    detail: str | None = None,
+) -> None:
+    """Store one completed analysis result for read-only UI presentation."""
+    global _latest_vision_result
+
+    normalised_kind = " ".join(str(kind).casefold().split())
+
+    if normalised_kind not in VISION_RESULT_KINDS:
+        raise ValueError(f"Unsupported vision result kind: {kind}")
+
+    normalised_text = str(text).strip()
+
+    if not normalised_text:
+        raise ValueError("Vision result text cannot be empty.")
+
+    normalised_detail = str(detail or "").strip()
+
+    with _vision_result_lock:
+        _latest_vision_result = VisionResult(
+            kind=normalised_kind,
+            text=normalised_text,
+            detail=normalised_detail,
+        )
+
+
+def get_latest_vision_result() -> VisionResult | None:
+    """Return the latest immutable completed vision result, if any."""
+    with _vision_result_lock:
+        return _latest_vision_result
+
+
+def clear_latest_vision_result() -> None:
+    """Remove any completed result when the related vision session ends."""
+    global _latest_vision_result
+
+    with _vision_result_lock:
+        _latest_vision_result = None
 
 def set_vision_hud_mode(mode: str) -> None:
     """Set the normal camera overlay style."""
