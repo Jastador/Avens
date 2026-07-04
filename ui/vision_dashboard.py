@@ -5,21 +5,26 @@ from __future__ import annotations
 import time
 
 import cv2
-from PyQt5.QtCore import QThread, Qt, pyqtSignal
+from PyQt5.QtCore import QThread, Qt, QTimer, pyqtSignal
 from PyQt5.QtGui import QImage, QPixmap
-
 from PyQt5.QtWidgets import (
     QFrame,
     QHBoxLayout,
     QLabel,
+    QProgressBar,
     QPushButton,
     QSizePolicy,
     QVBoxLayout,
 )
 
+from core.camera_intelligence import DEEP_MODEL_NAME, FAST_MODEL_NAME
+from core.live_frame_buffer import live_frame_buffer
+from core.mode_controller import mode_controller
 from core.vision import (
     HandVisionProcessor,
     get_vision_hud_mode,
+    get_vision_scan_progress,
+    get_vision_scan_state,
     is_vision_guide_visible,
     is_vision_requested,
     set_vision_guide_visible,
@@ -27,8 +32,6 @@ from core.vision import (
     start_vision,
     stop_vision,
 )
-
-from core.live_frame_buffer import live_frame_buffer
 
 class VisionWorker(QThread):
     """Owns the webcam and MediaPipe work away from the Qt UI thread."""
@@ -124,41 +127,75 @@ class VisionDashboard(QFrame):
 
     def __init__(self, parent=None) -> None:
         super().__init__(parent)
+
         self.worker: VisionWorker | None = None
         self._fullscreen_mode = False
         self._last_status = "STANDBY"
+        self._reduced_motion = False
+
         self._build_ui()
+
+        # Reads lightweight runtime state for labels only. This never touches
+        # camera capture, frame processing, model requests, or recognition.
+        self._runtime_timer = QTimer(self)
+        self._runtime_timer.setInterval(250)
+        self._runtime_timer.timeout.connect(self._sync_runtime_labels)
+        self._runtime_timer.start()
+
+        self._sync_runtime_labels()
 
     def _build_ui(self) -> None:
         self.setObjectName("visionDashboard")
         self.setFixedSize(670, 485)
+
         self.setStyleSheet(
             """
             QFrame#visionDashboard {
-                background: rgba(10, 14, 24, 245);
+                background: rgba(8, 13, 23, 247);
                 border: 1px solid #e6b94a;
                 border-radius: 18px;
             }
+
             QLabel#visionTitle {
                 color: #f5e650;
                 font-size: 17px;
                 font-weight: 700;
                 letter-spacing: 1px;
             }
+
+            QLabel#visionMode {
+                color: #79e7ff;
+                background: rgba(26, 71, 92, 150);
+                border: 1px solid rgba(95, 206, 235, 180);
+                border-radius: 7px;
+                font-size: 10px;
+                font-weight: 700;
+                padding: 4px 7px;
+            }
+
             QLabel#visionStatus {
                 color: #b8d4ff;
                 font-size: 11px;
                 font-weight: 700;
             }
+
             QLabel#gestureLabel {
                 color: #ffffff;
                 font-size: 14px;
                 font-weight: 700;
             }
+
+            QLabel#scanLabel {
+                color: #f5e650;
+                font-size: 10px;
+                font-weight: 700;
+            }
+
             QLabel#metaLabel {
                 color: #9aa9c5;
                 font-size: 11px;
             }
+
             QLabel#cameraFeed {
                 background: #020308;
                 border: 1px solid #27304a;
@@ -166,19 +203,35 @@ class VisionDashboard(QFrame):
                 color: #8491aa;
                 font-size: 14px;
             }
+
+            QProgressBar#scanProgress {
+                background: #0b111d;
+                border: 1px solid #293a52;
+                border-radius: 2px;
+                min-height: 4px;
+                max-height: 4px;
+            }
+
+            QProgressBar#scanProgress::chunk {
+                background: #f5e650;
+                border-radius: 2px;
+            }
+
             QPushButton {
                 background: #18233b;
                 border: 1px solid #314765;
                 border-radius: 8px;
                 color: #eaf2ff;
-                font-size: 12px;
+                font-size: 11px;
                 font-weight: 700;
-                padding: 8px 14px;
+                padding: 8px 10px;
             }
+
             QPushButton:hover {
                 background: #223555;
                 border-color: #f5e650;
             }
+
             QPushButton:disabled {
                 color: #65718a;
                 border-color: #243044;
@@ -190,69 +243,98 @@ class VisionDashboard(QFrame):
         layout = QVBoxLayout(self)
         self._layout = layout
         layout.setContentsMargins(18, 16, 18, 16)
-        layout.setSpacing(10)
+        layout.setSpacing(8)
 
         self.header_widget = QFrame()
-
         header = QHBoxLayout(self.header_widget)
         header.setContentsMargins(0, 0, 0, 0)
+        header.setSpacing(8)
+
         self.title_label = QLabel("AVENS VISION")
         self.title_label.setObjectName("visionTitle")
+
+        self.mode_label = QLabel("LOCAL · VISION READY")
+        self.mode_label.setObjectName("visionMode")
+        self.mode_label.setAlignment(Qt.AlignCenter)
+        self.mode_label.setMaximumWidth(300)
+
         self.status_label = QLabel("● STANDBY")
         self.status_label.setObjectName("visionStatus")
         self.status_label.setAlignment(Qt.AlignRight | Qt.AlignVCenter)
+        self.status_label.setMinimumWidth(112)
+
         header.addWidget(self.title_label)
         header.addStretch(1)
+        header.addWidget(self.mode_label)
         header.addWidget(self.status_label)
         layout.addWidget(self.header_widget)
 
         self.camera_feed = QLabel("Camera is offline")
         self.camera_feed.setObjectName("cameraFeed")
         self.camera_feed.setAlignment(Qt.AlignCenter)
-        self.camera_feed.setMinimumSize(634, 356)
+        self.camera_feed.setMinimumSize(634, 336)
         layout.addWidget(self.camera_feed)
 
-        self.telemetry_widget = QFrame()
+        self.scan_progress = QProgressBar()
+        self.scan_progress.setObjectName("scanProgress")
+        self.scan_progress.setRange(0, 100)
+        self.scan_progress.setValue(0)
+        self.scan_progress.setTextVisible(False)
+        self.scan_progress.hide()
+        layout.addWidget(self.scan_progress)
 
+        self.telemetry_widget = QFrame()
         telemetry_row = QHBoxLayout(self.telemetry_widget)
         telemetry_row.setContentsMargins(0, 0, 0, 0)
+        telemetry_row.setSpacing(8)
+
         self.gesture_label = QLabel("GESTURE: NO HAND DETECTED")
         self.gesture_label.setObjectName("gestureLabel")
-        self.meta_label = QLabel("HANDS: 0  |  FPS: 0")
+
+        self.scan_label = QLabel("SCAN: IDLE")
+        self.scan_label.setObjectName("scanLabel")
+        self.scan_label.setAlignment(Qt.AlignCenter)
+
+        self.meta_label = QLabel("HANDS: 0 | FPS: 0")
         self.meta_label.setObjectName("metaLabel")
         self.meta_label.setAlignment(Qt.AlignRight | Qt.AlignVCenter)
+
         telemetry_row.addWidget(self.gesture_label)
         telemetry_row.addStretch(1)
+        telemetry_row.addWidget(self.scan_label)
         telemetry_row.addWidget(self.meta_label)
         layout.addWidget(self.telemetry_widget)
 
         self.controls_widget = QFrame()
-
         controls = QHBoxLayout(self.controls_widget)
         controls.setContentsMargins(0, 0, 0, 0)
-
-        self.guide_button = QPushButton("HIDE GUIDE")
-        self.guide_button.clicked.connect(self.toggle_guide)
-
-        self.hud_button = QPushButton("MINIMAL HUD")
-        self.hud_button.clicked.connect(self.toggle_hud_mode)
+        controls.setSpacing(7)
 
         self.start_button = QPushButton("START CAMERA")
         self.stop_button = QPushButton("STOP CAMERA")
+        self.guide_button = QPushButton("HIDE GUIDE")
+        self.hud_button = QPushButton("MINIMAL HUD")
+        self.motion_button = QPushButton("MOTION: FULL")
+
         self.stop_button.setEnabled(False)
 
         self.start_button.clicked.connect(self.request_start)
         self.stop_button.clicked.connect(self.request_stop)
+        self.guide_button.clicked.connect(self.toggle_guide)
+        self.hud_button.clicked.connect(self.toggle_hud_mode)
+        self.motion_button.clicked.connect(self.toggle_reduced_motion)
 
         controls.addWidget(self.start_button)
         controls.addWidget(self.stop_button)
         controls.addWidget(self.guide_button)
         controls.addWidget(self.hud_button)
+        controls.addWidget(self.motion_button)
         controls.addStretch(1)
-
         layout.addWidget(self.controls_widget)
+
         self._sync_guide_button()
         self._sync_hud_button()
+        self._sync_motion_button()
 
     def set_fullscreen_mode(self, enabled: bool) -> None:
         """Switch between dashboard view and camera-only fullscreen."""
@@ -266,6 +348,7 @@ class VisionDashboard(QFrame):
             self.setMaximumSize(16_777_215, 16_777_215)
 
             self.header_widget.hide()
+            self.scan_progress.hide()
             self.telemetry_widget.hide()
             self.controls_widget.hide()
 
@@ -274,28 +357,27 @@ class VisionDashboard(QFrame):
                 QSizePolicy.Expanding,
                 QSizePolicy.Expanding,
             )
-
             self._layout.setContentsMargins(18, 18, 18, 18)
 
             if self.parentWidget() is not None:
                 self.setGeometry(self.parentWidget().rect())
-
         else:
             self.header_widget.show()
             self.telemetry_widget.show()
             self.controls_widget.show()
 
-            self.camera_feed.setMinimumSize(634, 356)
+            self.camera_feed.setMinimumSize(634, 336)
             self.camera_feed.setSizePolicy(
                 QSizePolicy.Preferred,
                 QSizePolicy.Preferred,
             )
 
             self._layout.setContentsMargins(18, 16, 18, 16)
-
             self.setFixedSize(670, 485)
             self.move(418, 20)
-    
+
+        self._sync_runtime_labels()
+
     def sync_requested_state(self) -> None:
         """Keep the camera and buttons synced with voice commands."""
         requested = is_vision_requested()
@@ -308,6 +390,7 @@ class VisionDashboard(QFrame):
 
         self._sync_guide_button()
         self._sync_hud_button()
+        self._sync_runtime_labels()
 
     def toggle_guide(self) -> None:
         """Toggle the on-camera gesture legend."""
@@ -321,10 +404,17 @@ class VisionDashboard(QFrame):
             if get_vision_hud_mode() == "STANDARD"
             else "STANDARD"
         )
-
         set_vision_hud_mode(next_mode)
         self._sync_hud_button()
 
+    def toggle_reduced_motion(self) -> None:
+        """Set a UI-only preference for calmer vision animations."""
+        self._reduced_motion = not self._reduced_motion
+        self._sync_motion_button()
+
+    def is_reduced_motion_enabled(self) -> bool:
+        """Return the UI-only motion preference used by the orb renderer."""
+        return self._reduced_motion
 
     def _sync_hud_button(self) -> None:
         """Reflect the current HUD mode in the dashboard button."""
@@ -341,6 +431,53 @@ class VisionDashboard(QFrame):
             if is_vision_guide_visible()
             else "SHOW GUIDE"
         )
+
+    def _sync_motion_button(self) -> None:
+        """Display the actual UI motion preference."""
+        self.motion_button.setText(
+            "MOTION: REDUCED"
+            if self._reduced_motion
+            else "MOTION: FULL"
+        )
+
+    def _sync_runtime_labels(self) -> None:
+        """Render current camera mode and scan state without changing them."""
+        snapshot = mode_controller.snapshot()
+
+        if snapshot.camera_mode == "online":
+            mode_text = "ONLINE · GOOGLE LENS"
+            mode_tip = (
+                "Online camera mode. Lens Scan uses SerpApi Google Lens "
+                "through a temporary Cloudinary upload."
+            )
+        else:
+            mode_text = f"LOCAL · {FAST_MODEL_NAME} / {DEEP_MODEL_NAME}"
+            mode_tip = (
+                "Offline camera mode using the configured local Ollama "
+                "vision models."
+            )
+
+        self.mode_label.setText(mode_text)
+        self.mode_label.setToolTip(mode_tip)
+
+        scan_state = get_vision_scan_state()
+        scan_progress = get_vision_scan_progress()
+
+        if scan_state:
+            self.scan_label.setText(f"SCAN: {scan_state}")
+        elif self.worker is not None:
+            self.scan_label.setText("SCAN: READY")
+        else:
+            self.scan_label.setText("SCAN: IDLE")
+
+        show_progress = (
+            not self._fullscreen_mode
+            and scan_progress is not None
+        )
+        self.scan_progress.setVisible(show_progress)
+
+        if scan_progress is not None:
+            self.scan_progress.setValue(round(scan_progress * 100))
 
     def request_start(self) -> None:
         start_vision()
@@ -367,6 +504,8 @@ class VisionDashboard(QFrame):
         self.worker.finished.connect(self._on_worker_finished)
         self.worker.start()
 
+        self._sync_runtime_labels()
+
     def stop_camera(self) -> None:
         if self.worker is None:
             self._set_standby()
@@ -388,20 +527,35 @@ class VisionDashboard(QFrame):
         gesture = telemetry.get("gesture", "NO HAND DETECTED")
         hands = telemetry.get("hands_detected", 0)
         fps = telemetry.get("fps", 0.0)
-        self.gesture_label.setText(f"GESTURE: {gesture}")
-        self.meta_label.setText(f"HANDS: {hands}  |  FPS: {fps:.0f}")
+        last_action = telemetry.get("last_action")
+        controls_locked = telemetry.get("controls_locked", False)
+
+        gesture_text = f"GESTURE: {gesture}"
+        if last_action:
+            gesture_text = f"{gesture_text} · {last_action}"
+
+        meta_parts = [f"HANDS: {hands}", f"FPS: {fps:.0f}"]
+        if controls_locked:
+            meta_parts.append("LOCKED")
+
+        self.gesture_label.setText(gesture_text)
+        self.meta_label.setText(" | ".join(meta_parts))
 
     def _on_camera_started(self) -> None:
         self._set_status("● CAMERA ONLINE")
+        self._sync_runtime_labels()
 
     def _show_camera_error(self, message: str) -> None:
         self._set_status("● CAMERA ERROR")
         self.camera_feed.setText(f"Camera error\n{message}")
         self.gesture_label.setText("GESTURE: UNAVAILABLE")
+        self.scan_label.setText("SCAN: UNAVAILABLE")
+        self.scan_progress.hide()
 
     def _on_worker_finished(self) -> None:
         if self.worker is not None:
             self.worker.deleteLater()
+
         self.worker = None
         self._set_standby()
 
@@ -410,9 +564,10 @@ class VisionDashboard(QFrame):
         self.camera_feed.setPixmap(QPixmap())
         self.camera_feed.setText("Camera is offline")
         self.gesture_label.setText("GESTURE: NO HAND DETECTED")
-        self.meta_label.setText("HANDS: 0  |  FPS: 0")
+        self.meta_label.setText("HANDS: 0 | FPS: 0")
         self.start_button.setEnabled(True)
         self.stop_button.setEnabled(False)
+        self._sync_runtime_labels()
 
     def _set_status(self, status: str) -> None:
         self._last_status = status
@@ -420,5 +575,6 @@ class VisionDashboard(QFrame):
 
     def shutdown(self) -> None:
         """Ask the worker to stop before the parent window is destroyed."""
+        self._runtime_timer.stop()
         stop_vision()
         self.stop_camera()
