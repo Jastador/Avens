@@ -2,33 +2,75 @@
 
 import json
 import os
+import time
 
 import requests
 from dotenv import load_dotenv
 
-from config import OLLAMA_MODEL, USE_ONLINE_AI
+from config import OLLAMA_MODEL
 from core.memory import load_memory
+from core.mode_controller import mode_controller
 from core.profile import load_user_profile
-from utils.internet_check import is_internet_available
+from core.performance import performance
 
 
 load_dotenv()
 
 OLLAMA_CHAT_URL = "http://127.0.0.1:11434/api/chat"
+
 MAX_HISTORY_MESSAGES = 10
+LOCAL_BRAIN_KEEP_ALIVE = (
+    os.getenv("AVENS_LOCAL_BRAIN_KEEP_ALIVE", "5m").strip()
+    or "5m"
+)
+
+DEFAULT_OPENAI_MODEL = "gpt-5.4-mini"
+DEFAULT_GEMINI_MODEL = "gemini-3.5-flash"
 
 
-def get_system_prompt(dynamic_memories: str = "") -> str:
-    user_profile = load_user_profile()
+def _env_flag(name: str, default: bool = False) -> bool:
+    """Read one true/false environment setting safely."""
+    default_text = "true" if default else "false"
 
-    return f"""You are Avens, a local desktop AI assistant.
+    return os.getenv(name, default_text).strip().casefold() in {
+        "1",
+        "true",
+        "yes",
+        "on",
+    }
+
+
+def is_online_context_sharing_enabled() -> bool:
+    """Return whether profile, memories, and prior chat may leave the laptop."""
+    return _env_flag("AVENS_SHARE_LOCAL_CONTEXT_ONLINE", default=False)
+
+
+def get_system_prompt(
+    dynamic_memories: str = "",
+    include_private_context: bool = True,
+) -> str:
+    """Build Avens instructions for either local or remote providers."""
+    if include_private_context:
+        user_profile = load_user_profile()
+        memories = dynamic_memories or "No relevant memories found."
+    else:
+        user_profile = (
+            "Not shared with online providers. "
+            "Answer without assuming private user details."
+        )
+        memories = (
+            "Not shared with online providers. "
+            "Use only the current conversation."
+        )
+
+    return f"""You are Avens, a desktop AI assistant.
 Your personality is a subtle mix of TARS from Interstellar and JARVIS.
 
---- LOCAL USER PROFILE ---
+--- USER PROFILE ---
 {user_profile}
 
---- RELEVANT PAST CONTEXTUAL MEMORIES ---
-{dynamic_memories}
+--- RELEVANT CONTEXTUAL MEMORIES ---
+{memories}
 
 PERSONALITY RULES:
 - Be direct first. Use occasional dry wit, not constant roasting.
@@ -38,7 +80,9 @@ PERSONALITY RULES:
 COMMAND RULES:
 - Output tags only when PC interaction is actually required.
 - Answer normally when a question does not need an action.
-- Never use TRANSLATE, EXPLAIN, or CALCULATE tags unless the action is explicitly requested and needed.
+- Never use TRANSLATE, EXPLAIN, CALCULATE, TIME, MEMORY, REMEMBER, SAVE, or LEARN tags.
+- Explain, calculate, translate, and answer ordinary questions using plain text.
+- A request to explain something is always a plain-text response, never a tag.
 - Never add extra parameters, server names, or invented syntax to tags.
 - For multiple requested actions, output separate tags.
 - For ordinary conversation, questions about Avens, user profile, preferences, hobbies, identity, or free-time questions, reply in plain text.
@@ -51,17 +95,12 @@ Available Tags:
 <RESEARCH: Query>
 <REMIND: Seconds | Task>
 <OPEN: AppName>
-<MACRO: JOIN_ILLUMINATI_VC>
 <SEARCH: Query>
 <PLAY: Song or Video>
-<TRANSLATE: Lang | Text>
-<EXPLAIN: Concept>
-<CALCULATE: Math>
 <CMD: SET_VOL | 50>
 <CMD: SET_BRIGHT | 50>
 <CMD: READING_MODE>
 <CMD: ANALYZE_SCREEN>
-<CMD: TIME>
 <CMD: MUTE>
 <CMD: SILENCE_NOTIFS>
 <CMD: VISION_ON>
@@ -80,83 +119,407 @@ Avens: Deactivating optical sensors, sir. <CMD: VISION_OFF>
 
 
 chat_history = [
-    {"role": "system", "content": get_system_prompt()}
+    {
+        "role": "system",
+        "content": get_system_prompt(),
+    }
 ]
 
 
 def manage_memory(role: str, text: str) -> None:
     """Store recent conversation while keeping the system prompt intact."""
-    chat_history.append({"role": role, "content": text})
+    chat_history.append(
+        {
+            "role": role,
+            "content": text,
+        }
+    )
 
     while len(chat_history) > MAX_HISTORY_MESSAGES + 1:
         chat_history.pop(1)
 
 
-def online_ai(prompt: str):
-    """Use OpenAI only when explicitly enabled and configured."""
-    api_key = os.getenv("OPENAI_API_KEY")
+def _remove_last_user_turn(prompt: str) -> None:
+    """Undo a failed online turn before falling back to local Ollama."""
+    if not chat_history:
+        return
+
+    last_item = chat_history[-1]
+
+    if (
+        last_item.get("role") == "user"
+        and last_item.get("content") == prompt
+    ):
+        chat_history.pop()
+
+
+def _history_without_system() -> list[dict[str, str]]:
+    """Return clean user/assistant history for cloud providers."""
+    messages: list[dict[str, str]] = []
+
+    for item in chat_history[1:]:
+        role = str(item.get("role", "")).strip()
+        content = str(item.get("content", "")).strip()
+
+        if role not in {"user", "assistant"} or not content:
+            continue
+
+        messages.append(
+            {
+                "role": role,
+                "content": content,
+            }
+        )
+
+    return messages
+
+
+def _prepare_online_turn(
+    prompt: str,
+) -> tuple[str, list[dict[str, str]]]:
+    """Build one remote request while respecting privacy settings."""
+    share_context = is_online_context_sharing_enabled()
+
+    dynamic_memories = (
+        load_memory(current_query=prompt)
+        if share_context
+        else ""
+    )
+
+    system_prompt = get_system_prompt(
+        dynamic_memories,
+        include_private_context=share_context,
+    )
+
+    manage_memory("user", prompt)
+
+    if not share_context:
+        return (
+            system_prompt,
+            [
+                {
+                    "role": "user",
+                    "content": prompt,
+                }
+            ],
+        )
+
+    return system_prompt, _history_without_system()
+
+
+def _format_gemini_input(
+    messages: list[dict[str, str]],
+) -> str:
+    """Convert local history into a plain transcript for Gemini."""
+    lines = [
+        "Conversation transcript:",
+    ]
+
+    for message in messages:
+        speaker = (
+            "USER"
+            if message["role"] == "user"
+            else "AVENS"
+        )
+
+        lines.append(f"{speaker}: {message['content']}")
+
+    return "\n\n".join(lines)
+
+
+def _yield_complete_reply(reply: str):
+    """Split a completed cloud reply into text and command-tag events."""
+    text_buffer = ""
+    tag_buffer = ""
+    in_tag = False
+
+    for character in reply:
+        if character == "<" and not in_tag:
+            in_tag = True
+            tag_buffer = "<"
+
+            if text_buffer.strip():
+                yield ("text", text_buffer.strip())
+                text_buffer = ""
+
+        elif in_tag:
+            tag_buffer += character
+
+            if character == ">":
+                in_tag = False
+                yield ("tag", tag_buffer)
+                tag_buffer = ""
+
+        else:
+            text_buffer += character
+
+            if character in ".!?":
+                if text_buffer.strip():
+                    yield ("text", text_buffer.strip())
+
+                text_buffer = ""
+
+    if in_tag and tag_buffer:
+        text_buffer += tag_buffer
+
+    if text_buffer.strip():
+        yield ("text", text_buffer.strip())
+
+
+def _fallback_to_local(
+    prompt: str,
+    reason: str,
+):
+    """Explain remote failure briefly, then return to the local brain."""
+    print(f"⚠️ Online brain fallback: {reason}")
+
+    _remove_last_user_turn(prompt)
+
+    yield (
+        "text",
+        "The online brain is unavailable. Returning to local processing, sir.",
+    )
+
+    yield from offline_ai(prompt)
+
+
+def gpt_ai(prompt: str):
+    """Use OpenAI only after an explicit online GPT mode selection."""
+    api_key = os.getenv("OPENAI_API_KEY", "").strip()
+
     if not api_key:
-        print("⚠️ OpenAI key is unavailable, switching to local Ollama.")
+        yield (
+            "text",
+            "GPT mode is selected, but the OpenAI API key is missing. "
+            "Returning to local processing, sir.",
+        )
         yield from offline_ai(prompt)
         return
 
     try:
         from openai import OpenAI
 
-        chat_history[0]["content"] = get_system_prompt()
-        manage_memory("user", prompt)
+        system_prompt, messages = _prepare_online_turn(prompt)
 
-        client = OpenAI(api_key=api_key)
-        response = client.chat.completions.create(
-            model="gpt-4o-mini",
-            messages=chat_history,
+        model_name = (
+            os.getenv(
+                "AVENS_OPENAI_MODEL",
+                DEFAULT_OPENAI_MODEL,
+            ).strip()
+            or DEFAULT_OPENAI_MODEL
         )
 
-        reply = response.choices[0].message.content or ""
+        print(f"🌐 Using GPT brain ({model_name})...")
+
+        client = OpenAI(api_key=api_key)
+
+        response = client.responses.create(
+            model=model_name,
+            instructions=system_prompt,
+            input=messages,
+            max_output_tokens=500,
+            store=False,
+        )
+
+        reply = str(response.output_text or "").strip()
+
+        if not reply:
+            raise RuntimeError("GPT returned an empty response.")
+
         manage_memory("assistant", reply)
-        yield ("text", reply)
+
+        yield from _yield_complete_reply(reply)
 
     except Exception as error:
-        print(f"⚠️ Online AI failed ({error}), switching to local Ollama.")
+        yield from _fallback_to_local(prompt, str(error))
 
-        if chat_history and chat_history[-1].get("role") == "user":
-            chat_history.pop()
 
+def gemini_ai(prompt: str):
+    """Use Gemini only after an explicit online Gemini mode selection."""
+    api_key = os.getenv("GEMINI_API_KEY", "").strip()
+
+    if not api_key:
+        yield (
+            "text",
+            "Gemini mode is selected, but the Gemini API key is missing. "
+            "Returning to local processing, sir.",
+        )
         yield from offline_ai(prompt)
+        return
+
+    try:
+        from google import genai
+
+        system_prompt, messages = _prepare_online_turn(prompt)
+
+        model_name = (
+            os.getenv(
+                "AVENS_GEMINI_MODEL",
+                DEFAULT_GEMINI_MODEL,
+            ).strip()
+            or DEFAULT_GEMINI_MODEL
+        )
+
+        print(f"🌐 Using Gemini brain ({model_name})...")
+
+        client = genai.Client(api_key=api_key)
+
+        interaction = client.interactions.create(
+            model=model_name,
+            system_instruction=system_prompt,
+            input=_format_gemini_input(messages),
+            generation_config={
+                "temperature": 0.3,
+                "thinking_level": "low",
+            },
+            store=False,
+        )
+
+        reply = str(interaction.output_text or "").strip()
+
+        if not reply:
+            raise RuntimeError("Gemini returned an empty response.")
+
+        manage_memory("assistant", reply)
+
+        yield from _yield_complete_reply(reply)
+
+    except Exception as error:
+        yield from _fallback_to_local(prompt, str(error))
 
 
 def offline_ai(prompt: str):
-    """Stream a response from the local Ollama model."""
-    print(f"🧠 Contacting local Ollama ({OLLAMA_MODEL})...")
+    """Stream a response from the local custom_avens Ollama model."""
+    trace_id = performance.current_trace_id()
+    owns_trace = trace_id is None
 
-    past_context = load_memory(current_query=prompt)
-    chat_history[0]["content"] = get_system_prompt(past_context)
-    manage_memory("user", prompt)
+    if owns_trace:
+        trace_id = performance.begin(
+            "brain_response",
+            metadata={
+                "provider": "local_ollama",
+                "model": OLLAMA_MODEL,
+            },
+        )
 
-    payload = {
-        "model": OLLAMA_MODEL,
-        "keep_alive": -1,
-        "messages": chat_history,
-        "stream": True,
-        "options": {
-            "num_ctx": 2048,
-            "temperature": 0.3,
-            "top_p": 0.9,
+    span_id = performance.begin_span(
+        "brain_local_ollama",
+        trace_id,
+        metadata={
+            "model": OLLAMA_MODEL,
+            "keep_alive": LOCAL_BRAIN_KEEP_ALIVE,
         },
-    }
+    )
 
+    outcome = "ok"
+    request_started_at = None
     full_reply = ""
     text_buffer = ""
     tag_buffer = ""
     in_tag = False
+    first_token_seen = False
+    first_text_event_seen = False
+
+    def record_first_text_event(text: str) -> None:
+        """Record when the first real spoken text becomes available."""
+        nonlocal first_text_event_seen
+
+        clean_text = text.strip()
+
+        if first_text_event_seen or not clean_text:
+            return
+
+        first_text_event_seen = True
+
+        performance.mark(
+            "brain_first_text_event",
+            trace_id,
+            only_once=True,
+        )
+
+        if request_started_at is not None:
+            performance.record_stage(
+                "brain_time_to_first_text_event_seconds",
+                time.perf_counter() - request_started_at,
+                trace_id,
+            )
+
+        performance.add_metric(
+            "brain_first_text_characters",
+            len(clean_text),
+            trace_id,
+        )
 
     try:
+        print(f"🧠 Using local brain ({OLLAMA_MODEL})...")
+
+        performance.mark(
+            "brain_started",
+            trace_id,
+            only_once=True,
+        )
+
+        memory_started_at = time.perf_counter()
+
+        past_context = load_memory(current_query=prompt)
+
+        performance.record_stage(
+            "brain_memory_lookup_seconds",
+            time.perf_counter() - memory_started_at,
+            trace_id,
+        )
+
+        prompt_started_at = time.perf_counter()
+
+        chat_history[0]["content"] = get_system_prompt(
+            past_context,
+            include_private_context=True,
+        )
+
+        manage_memory("user", prompt)
+
+        performance.record_stage(
+            "brain_prompt_build_seconds",
+            time.perf_counter() - prompt_started_at,
+            trace_id,
+        )
+
+        performance.add_metadata(
+            {
+                "brain_provider": "local_ollama",
+                "brain_model": OLLAMA_MODEL,
+                "brain_keep_alive": LOCAL_BRAIN_KEEP_ALIVE,
+            },
+            trace_id,
+        )
+
+        payload = {
+            "model": OLLAMA_MODEL,
+            "keep_alive": LOCAL_BRAIN_KEEP_ALIVE,
+            "messages": chat_history,
+            "stream": True,
+            "options": {
+                "num_ctx": 2048,
+                "temperature": 0.3,
+                "top_p": 0.9,
+            },
+        }
+
+        request_started_at = time.perf_counter()
+
         response = requests.post(
             OLLAMA_CHAT_URL,
             json=payload,
             stream=True,
             timeout=(5, 180),
         )
+
+        performance.record_stage(
+            "brain_ollama_request_open_seconds",
+            time.perf_counter() - request_started_at,
+            trace_id,
+        )
+
         response.raise_for_status()
 
         for line in response.iter_lines():
@@ -164,9 +527,72 @@ def offline_ai(prompt: str):
                 continue
 
             try:
-                chunk = json.loads(line).get("message", {}).get("content", "")
+                data = json.loads(line)
             except json.JSONDecodeError:
                 continue
+
+            chunk = data.get("message", {}).get("content", "")
+
+            if chunk and not first_token_seen:
+                first_token_seen = True
+
+                performance.record_stage(
+                    "brain_time_to_first_token_seconds",
+                    time.perf_counter() - request_started_at,
+                    trace_id,
+                )
+
+                performance.mark(
+                    "brain_first_token",
+                    trace_id,
+                    only_once=True,
+                )
+
+            if data.get("done"):
+                load_seconds = (
+                    data.get("load_duration", 0)
+                    / 1_000_000_000
+                )
+
+                prompt_seconds = (
+                    data.get("prompt_eval_duration", 0)
+                    / 1_000_000_000
+                )
+
+                answer_seconds = (
+                    data.get("eval_duration", 0)
+                    / 1_000_000_000
+                )
+
+                performance.record_stage(
+                    "brain_ollama_model_load_seconds",
+                    load_seconds,
+                    trace_id,
+                )
+
+                performance.record_stage(
+                    "brain_ollama_prompt_eval_seconds",
+                    prompt_seconds,
+                    trace_id,
+                )
+
+                performance.record_stage(
+                    "brain_ollama_answer_eval_seconds",
+                    answer_seconds,
+                    trace_id,
+                )
+
+                performance.add_metric(
+                    "brain_ollama_prompt_tokens",
+                    data.get("prompt_eval_count", 0),
+                    trace_id,
+                )
+
+                performance.add_metric(
+                    "brain_ollama_answer_tokens",
+                    data.get("eval_count", 0),
+                    trace_id,
+                )
 
             full_reply += chunk
 
@@ -176,7 +602,11 @@ def offline_ai(prompt: str):
                     tag_buffer = "<"
 
                     if text_buffer.strip():
-                        yield ("text", text_buffer.strip())
+                        text_to_yield = text_buffer.strip()
+
+                        record_first_text_event(text_to_yield)
+
+                        yield ("text", text_to_yield)
                         text_buffer = ""
 
                 elif in_tag:
@@ -184,6 +614,13 @@ def offline_ai(prompt: str):
 
                     if character == ">":
                         in_tag = False
+
+                        performance.mark(
+                            "brain_first_tag_event",
+                            trace_id,
+                            only_once=True,
+                        )
+
                         yield ("tag", tag_buffer)
                         tag_buffer = ""
 
@@ -192,31 +629,85 @@ def offline_ai(prompt: str):
 
                     if character in ".!?":
                         if text_buffer.strip():
-                            yield ("text", text_buffer.strip())
-                        text_buffer = ""
+                            text_to_yield = text_buffer.strip()
+
+                            record_first_text_event(text_to_yield)
+
+                            yield ("text", text_to_yield)
+                            text_buffer = ""
 
         if in_tag and tag_buffer:
             text_buffer += tag_buffer
 
         if text_buffer.strip():
-            yield ("text", text_buffer.strip())
+            text_to_yield = text_buffer.strip()
+
+            record_first_text_event(text_to_yield)
+
+            yield ("text", text_to_yield)
 
         manage_memory("assistant", full_reply)
 
     except requests.RequestException as error:
         print(f"⚠️ Ollama connection error: {error}")
-        yield ("text", "My local brain is unavailable, sir. Check that Ollama is running.")
+        outcome = "ollama_connection_error"
+
+        yield (
+            "text",
+            "My local brain is unavailable, sir. Check that Ollama is running.",
+        )
 
     except Exception as error:
         print(f"⚠️ Brain error: {error}")
-        yield ("text", "My local brain is struggling, sir.")
+        outcome = "brain_error"
+
+        yield (
+            "text",
+            "My local brain is struggling, sir.",
+        )
+
+    finally:
+        if request_started_at is not None:
+            performance.record_stage(
+                "brain_ollama_stream_wall_seconds",
+                time.perf_counter() - request_started_at,
+                trace_id,
+            )
+
+        performance.add_metric(
+            "brain_reply_characters",
+            len(full_reply),
+            trace_id,
+        )
+
+        performance.finish_span(
+            span_id,
+            outcome=outcome,
+        )
+
+        if owns_trace:
+            performance.finish(
+                trace_id,
+                outcome=outcome,
+            )
 
 
 def get_response(prompt: str):
-    """Choose online mode only when enabled and internet is available."""
-    if USE_ONLINE_AI and is_internet_available():
-        print("🌐 Using Online AI")
-        return online_ai(prompt)
+    """Route one question through the current explicit brain mode."""
+    state = mode_controller.snapshot()
 
-    print("📴 Using Offline AI")
+    if state.brain_mode != "online":
+        return offline_ai(prompt)
+
+    if state.brain_provider == "gpt":
+        return gpt_ai(prompt)
+
+    if state.brain_provider == "gemini":
+        return gemini_ai(prompt)
+
+    print(
+        "⚠️ Invalid online brain provider. "
+        "Returning to local Ollama.",
+    )
+
     return offline_ai(prompt)

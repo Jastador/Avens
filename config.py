@@ -13,6 +13,30 @@ BASE_PATH = Path(getattr(sys, "_MEIPASS", PROJECT_ROOT))
 # Local overrides stay private in .env and are never committed.
 load_dotenv(PROJECT_ROOT / ".env", override=False)
 
+# Make direct module imports use the same private local Hugging Face cache
+# and offline behaviour as the main Avens launcher.
+os.environ["HF_HOME"] = os.getenv(
+    "AVENS_HF_HOME",
+    str(PROJECT_ROOT / "models" / "huggingface"),
+)
+
+offline_mode = os.getenv(
+    "AVENS_OFFLINE_MODE",
+    "false",
+).strip().casefold() in {
+    "1",
+    "true",
+    "yes",
+    "on",
+}
+
+for variable in (
+    "HF_HUB_OFFLINE",
+    "HF_DATASETS_OFFLINE",
+    "TRANSFORMERS_OFFLINE",
+):
+    os.environ[variable] = "1" if offline_mode else "0"
+
 _default_data_root = Path(
     os.getenv("LOCALAPPDATA", str(Path.home() / ".local" / "share"))
 ) / "Avens"

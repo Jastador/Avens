@@ -48,3 +48,11 @@ MisoTTS_Archive/
 # OS junk
 .DS_Store
 Thumbs.db
+
+screenshots/
+
+# Local performance traces
+logs/
+
+# Python bytecode caches
+__pycache__/

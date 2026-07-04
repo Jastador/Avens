@@ -5,6 +5,32 @@ import numpy as np
 import torch
 from kokoro import KPipeline
 from config import BASE_PATH
+from core.performance import performance
+
+def _read_positive_int_env(
+    name: str,
+    default: int,
+) -> int:
+    """Read one positive integer setting safely."""
+    try:
+        return max(
+            1,
+            int(os.getenv(name, str(default)).strip()),
+        )
+    except (TypeError, ValueError):
+        return default
+
+
+TTS_CPU_THREADS = _read_positive_int_env(
+    "AVENS_TTS_CPU_THREADS",
+    4,
+)
+
+try:
+    torch.set_num_threads(TTS_CPU_THREADS)
+    print(f"🧵 Kokoro CPU threads: {TTS_CPU_THREADS}")
+except RuntimeError as error:
+    print(f"⚠️ Could not set Kokoro CPU threads: {error}")
 
 # Initialize the pipeline globally
 print("🧠 Initializing Kokoro TTS Engine...")
@@ -23,73 +49,230 @@ except Exception as e:
     pipeline = None
     voicepack = None
 
-def speak(text, shared_state=None):
-    if pipeline is None:
-        print("Avens (Text Only):", text)
-        return True
-        
-    print("Avens:", text)
-    text = text.replace('"', '').strip()
-    if not text:
-        return False
-        
-    # Check for immediate wake-word interruption before starting
-    if shared_state and shared_state.get("interrupt", False):
-        print("🛑 Speech Interrupted by User!")
-        return False
-        
+def speak(
+    text,
+    shared_state=None,
+    performance_label: str | None = None,
+):
+    clean_text = str(text).replace('"', "").strip()
+
+    safe_label = "_".join(
+        str(performance_label or "").casefold().split()
+    )
+
+    safe_label = "".join(
+        character
+        for character in safe_label
+        if character.isalnum() or character == "_"
+    )
+
+    stage_prefix = (
+        f"tts_{safe_label}"
+        if safe_label
+        else "tts"
+    )
+
+    span_name = (
+        f"tts_speak:{safe_label}"
+        if safe_label
+        else "tts_speak"
+    )
+
+    trace_id = performance.current_trace_id()
+    owns_trace = trace_id is None
+
+    if owns_trace:
+        trace_id = performance.begin(
+            "tts_speak",
+            metadata={
+                "backend": "kokoro",
+                "text_characters": len(clean_text),
+                "label": safe_label or "general",
+            },
+        )
+
+    span_id = performance.begin_span(
+        span_name,
+        trace_id,
+        metadata={
+            "backend": "kokoro",
+            "text_characters": len(clean_text),
+            "label": safe_label or "general",
+        },
+    )
+
+    speak_started_at = time.perf_counter()
+    first_audio_ready_at = None
+
+    if safe_label == "brain_response":
+        performance.mark(
+            "brain_response_tts_started",
+            trace_id,
+            only_once=True,
+        )
+    total_playback_seconds = 0.0
+    outcome = "ok"
+
     try:
-        # Generate the audio stream
-        generator = pipeline(text, voice=voicepack, speed=1.0)
-        for gs, ps, audio_chunk in generator:
-            # 🛑 Check mid-sentence for instant user interruption
+        if pipeline is None:
+            print("Avens (Text Only):", clean_text)
+            outcome = "pipeline_unavailable"
+            return True
+
+        print("Avens:", clean_text)
+
+        if not clean_text:
+            outcome = "empty_text"
+            return False
+
+        if shared_state and shared_state.get("interrupt", False):
+            print("🛑 Speech Interrupted by User!")
+            outcome = "interrupted_before_start"
+            return False
+
+        performance.mark_span(
+            span_id,
+            "generator_started",
+            only_once=True,
+        )
+
+        generator = pipeline(
+            clean_text,
+            voice=voicepack,
+            speed=1.0,
+        )
+
+        for _, _, audio_chunk in generator:
             if shared_state and shared_state.get("interrupt", False):
                 print("🛑 Speech Interrupted by User!")
                 sd.stop()
-                try:
-                    from ui.visualizer import audio_instance
-                    audio_instance.set_tts_level(0)
-                except: pass
+                outcome = "interrupted"
                 return False
-                
-            if hasattr(audio_chunk, 'cpu'):
+
+            if hasattr(audio_chunk, "cpu"):
                 audio_np = audio_chunk.cpu().numpy()
             else:
                 audio_np = np.array(audio_chunk)
-                
-            if len(audio_np) > 0:
-                # 🎨 DYNAMIC ORB AMPLITUDE: Calculate energy per chunk
-                chunk_energy = np.mean(np.abs(audio_np))
-                try:
-                    from ui.visualizer import audio_instance
-                    audio_instance.set_tts_level(chunk_energy * 1.5)  
-                except: pass
-                
-                # Stream directly to speakers
-                sd.play(audio_np, samplerate=24000)
-                
-                # 🔥 FIX: Replaced sd.wait() with a non-blocking check loop!
-                # This checks the interrupt flag 20 times a second while speaking
-                duration = len(audio_np) / 24000.0
-                elapsed = 0.0
-                while elapsed < duration:
-                    if shared_state and shared_state.get("interrupt", False):
-                        print("🛑 Speech Interrupted by User!")
-                        sd.stop()
-                        try:
-                            from ui.visualizer import audio_instance
-                            audio_instance.set_tts_level(0)
-                        except: 
-                            pass
-                        return False  # Speech was interrupted
-                    time.sleep(0.05)
-                    elapsed += 0.05
-    except Exception as e:
-        print(f"⚠️ TTS Error: {e}")
-        
-    # Clear visualizer level when sentence concludes
-    try:
-        from ui.visualizer import audio_instance
-        audio_instance.set_tts_level(0)
-    except: pass
-    return True
+
+            if len(audio_np) == 0:
+                continue
+
+            is_first_chunk = first_audio_ready_at is None
+            chunk_ready_at = time.perf_counter()
+
+            if is_first_chunk:
+                first_audio_ready_at = chunk_ready_at
+
+                performance.mark_span(
+                    span_id,
+                    "first_audio_chunk_ready",
+                    only_once=True,
+                )
+
+                if safe_label == "brain_response":
+                    performance.mark(
+                        "brain_response_audio_chunk_ready",
+                        trace_id,
+                        only_once=True,
+                    )
+
+            chunk_energy = np.mean(np.abs(audio_np))
+
+            try:
+                from ui.visualizer import audio_instance
+
+                audio_instance.set_tts_level(chunk_energy * 1.5)
+            except Exception:
+                pass
+
+            sd.play(audio_np, samplerate=24000)
+
+            if is_first_chunk:
+                performance.mark_span(
+                    span_id,
+                    "first_playback_queued",
+                    only_once=True,
+                )
+
+                # First assistant audio in the entire voice turn.
+                performance.mark(
+                    "first_answer_audio",
+                    trace_id,
+                    only_once=True,
+                )
+
+                # Specific result-audio marker for camera/Lens benchmarks.
+                if safe_label:
+                    performance.mark(
+                        f"{safe_label}_first_audio",
+                        trace_id,
+                        only_once=True,
+                    )
+
+            duration = len(audio_np) / 24000.0
+            total_playback_seconds += duration
+            elapsed = 0.0
+
+            while elapsed < duration:
+                if shared_state and shared_state.get("interrupt", False):
+                    print("🛑 Speech Interrupted by User!")
+                    sd.stop()
+                    outcome = "interrupted"
+                    return False
+
+                time.sleep(0.05)
+                elapsed += 0.05
+
+        if first_audio_ready_at is None:
+            outcome = "no_audio"
+
+        return True
+
+    except Exception as error:
+        print(f"⚠️ TTS Error: {error}")
+        outcome = "tts_error"
+        return True
+
+    finally:
+        if first_audio_ready_at is not None:
+            performance.record_stage(
+                f"{stage_prefix}_time_to_first_audio_seconds",
+                first_audio_ready_at - speak_started_at,
+                trace_id,
+            )
+
+        performance.record_stage(
+            f"{stage_prefix}_playback_seconds",
+            total_playback_seconds,
+            trace_id,
+        )
+
+        performance.record_stage(
+            f"{stage_prefix}_total_seconds",
+            time.perf_counter() - speak_started_at,
+            trace_id,
+        )
+
+        performance.add_metric(
+            f"{stage_prefix}_audio_seconds",
+            total_playback_seconds,
+            trace_id,
+        )
+
+        performance.finish_span(
+            span_id,
+            outcome=outcome,
+        )
+
+        try:
+            from ui.visualizer import audio_instance
+
+            audio_instance.set_tts_level(0)
+        except Exception:
+            pass
+
+        if owns_trace:
+            performance.finish(
+                trace_id,
+                outcome=outcome,
+            )
