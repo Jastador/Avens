@@ -1,21 +1,33 @@
-﻿numpy
+﻿# Core voice and local AI
+numpy
 sounddevice
 faster-whisper
 torch
 kokoro
+huggingface-hub
+vosk
+
+# UI and computer vision
 PyQt5
 Pillow
-requests
+opencv-python
+mediapipe
+
+# Local configuration and memory
 python-dotenv
 chromadb
-ddgs
+
+# Windows desktop automation
 pyautogui
-pygetwindow
+PyGetWindow
 screen-brightness-control
 comtypes
 pycaw
-opencv-python
-mediapipe
-vosk
+pywin32
+
+# HTTP, web research, and optional online services
+requests
+ddgs
 openai
-huggingface-hub
+google-genai
+cloudinary
