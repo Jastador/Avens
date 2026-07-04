@@ -1350,7 +1350,9 @@ def avens_loop():
             if use_local_camera:
                 from core.camera_intelligence import analyze_camera_frame
                 from core.vision import (
+                    clear_latest_vision_result,
                     is_vision_requested,
+                    set_latest_vision_result,
                     set_vision_scan_state,
                     start_vision,
                     stop_vision,
@@ -1367,6 +1369,8 @@ def avens_loop():
                 started_vision_for_local_scan = False
 
                 try:
+                    clear_latest_vision_result()
+
                     if not vision_was_running:
                         start_vision()
                         started_vision_for_local_scan = True
@@ -1432,6 +1436,11 @@ def avens_loop():
                             "The local vision model returned no answer."
                         )
 
+                    set_latest_vision_result(
+                        kind=f"local_{camera_request}",
+                        text=answer,
+                    )
+
                     shared_state["state"] = "speaking"
                     speak(
                         answer,
@@ -1476,7 +1485,9 @@ def avens_loop():
                     scan_frame_with_google_lens,
                 )
                 from core.vision import (
+                    clear_latest_vision_result,
                     is_vision_requested,
+                    set_latest_vision_result,
                     set_vision_scan_state,
                     start_vision,
                     stop_vision,
@@ -1487,6 +1498,8 @@ def avens_loop():
                 started_vision_for_lens = False
 
                 try:
+                    clear_latest_vision_result()
+
                     # Start Vision before speaking so the yellow scan box is visible.
                     if not vision_was_running:
                         start_vision()
@@ -1534,6 +1547,12 @@ def avens_loop():
 
                     print("🔎 Running one online Google Lens search.")
                     match = scan_frame_with_google_lens(frame)
+
+                    set_latest_vision_result(
+                        kind="online_google_lens",
+                        text=match.title,
+                        detail=match.source,
+                    )
 
                     shared_state["state"] = "speaking"
                     speak(

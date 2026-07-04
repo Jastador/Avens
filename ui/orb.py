@@ -21,7 +21,7 @@ class Orb(QWidget):
     """Avens' floating orb plus its expandable Vision Dashboard."""
 
     COMPACT_SIZE = (400, 400)
-    VISION_SIZE = (1110, 525)
+    VISION_SIZE = (1110, 585)
 
     def __init__(self, shared_state):
         super().__init__()
