@@ -79,6 +79,7 @@ PERSONALITY RULES:
 
 COMMAND RULES:
 - Output tags only when PC interaction is actually required.
+- App launching is handled by deterministic local skills before this brain runs. Never output OPEN, LAUNCH, START, or APP tags.
 - Answer normally when a question does not need an action.
 - Never use TRANSLATE, EXPLAIN, CALCULATE, TIME, MEMORY, REMEMBER, SAVE, or LEARN tags.
 - Explain, calculate, translate, and answer ordinary questions using plain text.
@@ -94,7 +95,6 @@ COMMAND RULES:
 Available Tags:
 <RESEARCH: Query>
 <REMIND: Seconds | Task>
-<OPEN: AppName>
 <SEARCH: Query>
 <PLAY: Song or Video>
 <CMD: SET_VOL | 50>
