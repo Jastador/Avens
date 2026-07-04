@@ -5,10 +5,8 @@ from collections.abc import Callable
 from dataclasses import dataclass
 
 from skills.app_launcher import (
-    APPROVED_APPS,
     LaunchResult,
-    find_approved_app,
-    launch_approved_app,
+    launch_catalog_app,
 )
 
 
@@ -35,10 +33,7 @@ class SkillResult:
 
 OPEN_APP_SKILL = LocalSkillDefinition(
     name="open_app",
-    allowed_arguments=tuple(
-        app.app_id
-        for app in APPROVED_APPS
-    ),
+    allowed_arguments=("exact_start_menu_app_name",),
     offline=True,
     requires_confirmation=False,
 )
@@ -66,44 +61,19 @@ def _clean_target(target: str) -> str:
     ).strip()
 
 
-def _unsupported_app_result() -> SkillResult:
-    """Stop unapproved launch requests before they reach Ollama."""
-    return SkillResult(
-        handled=True,
-        skill_name=OPEN_APP_SKILL.name,
-        message=(
-            "That app is not in my approved local app list yet. "
-            "For now, I can open Discord, Visual Studio Code, "
-            "or Google Chrome."
-        ),
-        offline=OPEN_APP_SKILL.offline,
-        requires_confirmation=OPEN_APP_SKILL.requires_confirmation,
-    )
-
-
 def route_local_skill(
     user_input: str,
     *,
-    launch_app: Callable[[str], LaunchResult] = launch_approved_app,
+    launch_app: Callable[[str], LaunchResult] = launch_catalog_app,
 ) -> SkillResult | None:
-    """Handle explicit local skills before any AI or legacy automation.
-
-    Unknown app-launch requests are handled locally too. This prevents them
-    from reaching Ollama, the old fuzzy launcher, or the Google-search route.
-    """
+    """Handle explicit local app-launch requests before AI or legacy tools."""
     match = APP_LAUNCH_PATTERN.match(user_input)
 
     if match is None:
         return None
 
-    app = find_approved_app(
-        _clean_target(match.group("target"))
-    )
-
-    if app is None:
-        return _unsupported_app_result()
-
-    launch_result = launch_app(app.app_id)
+    requested_name = _clean_target(match.group("target"))
+    launch_result = launch_app(requested_name)
 
     return SkillResult(
         handled=True,

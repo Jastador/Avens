@@ -1,20 +1,16 @@
 from __future__ import annotations
 
 import os
-import re
 from collections.abc import Callable, Iterable
 from dataclasses import dataclass
-from pathlib import Path
 
-
-@dataclass(frozen=True)
-class ApprovedApp:
-    """One explicitly allowed local application target."""
-
-    app_id: str
-    display_name: str
-    aliases: tuple[str, ...]
-    shortcut_names: tuple[str, ...]
+from skills.app_catalog import (
+    CatalogApp,
+    collapse_equivalent_shortcuts,
+    find_exact_matches,
+    normalise_name,
+    scan_start_menu_shortcuts,
+)
 
 
 @dataclass(frozen=True)
@@ -22,176 +18,110 @@ class LaunchResult:
     """The honest result of one local app launch attempt."""
 
     success: bool
-    app_id: str
+    display_name: str
     message: str
 
 
-APPROVED_APPS: tuple[ApprovedApp, ...] = (
-    ApprovedApp(
-        app_id="discord",
-        display_name="Discord",
-        aliases=("discord", "discord app"),
-        shortcut_names=("discord",),
-    ),
-    ApprovedApp(
-        app_id="vscode",
-        display_name="Visual Studio Code",
-        aliases=("vs code", "visual studio code", "vscode"),
-        shortcut_names=("visual studio code",),
-    ),
-    ApprovedApp(
-        app_id="chrome",
-        display_name="Google Chrome",
-        aliases=("chrome", "google chrome", "chrome browser"),
-        shortcut_names=("google chrome",),
-    ),
-)
-
-APPS_BY_ID = {
-    app.app_id: app
-    for app in APPROVED_APPS
+# These preserve convenient spoken aliases for common apps while the actual
+# shortcut lookup remains exact and deterministic.
+KNOWN_APP_ALIASES: dict[str, str] = {
+    normalise_name("discord app"): normalise_name("discord"),
+    normalise_name("vs code"): normalise_name("visual studio code"),
+    normalise_name("vscode"): normalise_name("visual studio code"),
+    normalise_name("chrome"): normalise_name("google chrome"),
+    normalise_name("chrome browser"): normalise_name("google chrome"),
 }
 
 
-def normalise_name(value: str) -> str:
-    """Make spoken and shortcut names comparable without fuzzy matching."""
-    return " ".join(
-        re.sub(r"[^a-z0-9]+", " ", value.casefold()).split()
-    )
-
-
-def find_approved_app(requested_name: str) -> ApprovedApp | None:
-    """Return an app only for an exact approved alias."""
-    requested = normalise_name(requested_name)
-
-    for app in APPROVED_APPS:
-        aliases = {
-            normalise_name(alias)
-            for alias in app.aliases
-        }
-
-        if requested in aliases:
-            return app
-
-    return None
-
-
-def get_start_menu_roots() -> tuple[Path, ...]:
-    """Return only standard Start Menu program locations.
-
-    Desktop shortcuts are intentionally excluded. A future skill can add an
-    explicit user-managed shortcut directory, but this first slice stays narrow.
-    """
-    roots: list[Path] = []
-
-    for environment_variable in ("PROGRAMDATA", "APPDATA"):
-        base_path = os.getenv(environment_variable)
-
-        if not base_path:
-            continue
-
-        root = (
-            Path(base_path)
-            / "Microsoft"
-            / "Windows"
-            / "Start Menu"
-            / "Programs"
-        )
-
-        if root.exists():
-            roots.append(root)
-
-    return tuple(roots)
-
-
-def find_approved_shortcut(
-    app: ApprovedApp,
-    shortcut_roots: Iterable[Path] | None = None,
-) -> Path | None:
-    """Find an exact approved Start Menu shortcut for one app."""
-    accepted_names = {
-        normalise_name(shortcut_name)
-        for shortcut_name in app.shortcut_names
-    }
-
-    roots = (
-        tuple(shortcut_roots)
-        if shortcut_roots is not None
-        else get_start_menu_roots()
-    )
-
-    for root in roots:
-        if not root.exists():
-            continue
-
-        try:
-            shortcuts = sorted(
-                (
-                    path
-                    for path in root.rglob("*")
-                    if path.is_file()
-                    and path.suffix.casefold() == ".lnk"
-                ),
-                key=lambda path: str(path).casefold(),
-            )
-        except OSError:
-            continue
-
-        for shortcut in shortcuts:
-            if normalise_name(shortcut.stem) in accepted_names:
-                return shortcut
-
-    return None
-
-
-def launch_approved_app(
-    app_id: str,
+def resolve_catalog_matches(
+    requested_name: str,
     *,
-    shortcut_roots: Iterable[Path] | None = None,
+    catalog: Iterable[CatalogApp] | None = None,
+) -> tuple[CatalogApp, ...]:
+    """Find exact local Start Menu matches for one spoken app request."""
+    entries = (
+        tuple(catalog)
+        if catalog is not None
+        else scan_start_menu_shortcuts()
+    )
+
+    normalized_request = normalise_name(requested_name)
+
+    if not normalized_request:
+        return ()
+
+    catalog_name = KNOWN_APP_ALIASES.get(
+        normalized_request,
+        normalized_request,
+    )
+
+    matches = find_exact_matches(catalog_name, entries)
+
+    # Most apps have one shortcut, so avoid reading shortcut targets unless
+    # duplicate names actually need resolving.
+    if len(matches) <= 1:
+        return matches
+
+    return collapse_equivalent_shortcuts(matches)
+
+
+def launch_catalog_app(
+    requested_name: str,
+    *,
+    catalog: Iterable[CatalogApp] | None = None,
     startfile: Callable[[str], object] | None = None,
 ) -> LaunchResult:
-    """Launch only one approved app via its exact Start Menu shortcut.
+    """Launch one exact Start Menu shortcut without shell commands.
 
-    This function never builds shell commands, never uses fuzzy matching, and
-    never opens Windows search for unknown requests.
+    Zero matches are reported honestly. Multiple matches are refused rather
+    than guessed. Only one exact match is allowed to launch.
     """
-    app = APPS_BY_ID.get(app_id)
-
-    if app is None:
-        raise ValueError(f"Unknown approved app id: {app_id}")
-
-    shortcut = find_approved_shortcut(
-        app,
-        shortcut_roots=shortcut_roots,
+    matches = resolve_catalog_matches(
+        requested_name,
+        catalog=catalog,
     )
 
-    if shortcut is None:
+    display_name = requested_name.strip() or "that app"
+
+    if not matches:
         return LaunchResult(
             success=False,
-            app_id=app.app_id,
+            display_name=display_name,
             message=(
-                f"{app.display_name} is approved, but I could not find its "
-                "exact Start Menu shortcut."
+                f"I could not find an exact Start Menu app named "
+                f"{display_name}, sir."
             ),
         )
 
+    if len(matches) > 1:
+        return LaunchResult(
+            success=False,
+            display_name=matches[0].display_name,
+            message=(
+                f"I found {len(matches)} exact Start Menu shortcuts named "
+                f"{matches[0].display_name}. I will not guess which one "
+                "to open, sir."
+            ),
+        )
+
+    app = matches[0]
     launcher = startfile or getattr(os, "startfile", None)
 
     if launcher is None:
         return LaunchResult(
             success=False,
-            app_id=app.app_id,
+            display_name=app.display_name,
             message=(
                 "Local app launching is available only on Windows."
             ),
         )
 
     try:
-        launcher(str(shortcut))
+        launcher(str(app.shortcut_path))
     except OSError as error:
         return LaunchResult(
             success=False,
-            app_id=app.app_id,
+            display_name=app.display_name,
             message=(
                 f"I could not open {app.display_name}: {error}"
             ),
@@ -199,6 +129,6 @@ def launch_approved_app(
 
     return LaunchResult(
         success=True,
-        app_id=app.app_id,
+        display_name=app.display_name,
         message=f"Opening {app.display_name}, sir.",
     )
