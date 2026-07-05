@@ -1,4 +1,3 @@
-import os
 import webbrowser
 import datetime
 import pyautogui
@@ -6,20 +5,16 @@ import time
 import pygetwindow as gw
 import ctypes
 import re
-import subprocess
-from automation.scanner import get_installed_apps
 from core.memory import save_memory
 from core.researcher import research_and_summarize
 from core.butler import set_reminder
+from skills.app_launcher import launch_catalog_app
 import screen_brightness_control as sbc
 
 # pycaw for precise Windows volume control
 from ctypes import cast, POINTER
 from comtypes import CLSCTX_ALL
 from pycaw.pycaw import AudioUtilities, IAudioEndpointVolume
-
-last_opened_app = None
-installed_apps = get_installed_apps()
 
 def force_volume_change(action, steps=5):
     # Fallback for relative volume control
@@ -60,7 +55,6 @@ def set_exact_volume(level):
 
 def execute_command(ai_tag, shared_state):
     vol_msg = ""
-    global last_opened_app
     tag = ai_tag.strip().upper()
 
     try:
@@ -84,9 +78,11 @@ def execute_command(ai_tag, shared_state):
             except: pass
             time.sleep(1)
         else:
-            discord_path = next((path for name, path in installed_apps.items() if "discord" in name), None)
-            if discord_path: os.startfile(discord_path)
-            else: os.system("start discord")
+            launch_result = launch_catalog_app("Discord")
+
+            if not launch_result.success:
+                return launch_result.message
+
             time.sleep(9)
 
         pyautogui.hotkey('ctrl', 'k')
@@ -157,47 +153,6 @@ def execute_command(ai_tag, shared_state):
             return f"Fact successfully indexed into long-term cognitive storage, sir."
         except Exception as e:
             return f"I encountered an indexing issue attempting to save that memory, sir."
-
-    # ==========================================
-    # 3. DYNAMIC APP LAUNCHER
-    # ==========================================
-    elif any(w in tag for w in ["OPEN", "LAUNCH", "START", "APP"]):
-        if ":" in ai_tag: raw_name = ai_tag.split(":", 1)[1].replace(">", "").strip().lower()
-        else: raw_name = ai_tag.replace("<", "").replace(">", "").replace("OPEN", "").strip().lower()
-        last_opened_app = raw_name
-
-        if "chrome" in raw_name or "chromium" in raw_name or "browser" in raw_name:
-            os.system("start chrome")
-            return f"Opening Google Chrome{vol_msg}"
-        elif "youtube" in raw_name:
-            webbrowser.open("https://www.youtube.com")
-            return f"Opening YouTube{vol_msg}"
-        elif "code" in raw_name or "visual studio" in raw_name:
-            os.system("code")
-            return f"Opening VS Code{vol_msg}"
-        else:
-            raw_name = raw_name.replace(".exe", "").strip()
-            best_match, match_name = None, raw_name
-            if raw_name in installed_apps:
-                best_match = installed_apps[raw_name]
-            else:
-                best_score = 0
-                req_words = set(raw_name.split())
-                for app_name, app_path in installed_apps.items():
-                    overlap = len(req_words.intersection(set(app_name.replace("-", " ").split())))
-                    if overlap > best_score:
-                        best_score, best_match, match_name = overlap, app_path, app_name
-                if not best_match:
-                    for app_name, app_path in installed_apps.items():
-                        if raw_name in app_name or app_name in raw_name:
-                            best_match, match_name = app_path, app_name
-                            break
-            if best_match:
-                os.startfile(best_match)
-                return f"Opening {match_name.title()}{vol_msg}"
-            else:
-                subprocess.Popen(f'explorer "search-ms:query={raw_name}"')
-                return f"Initiating a deep system scan for {raw_name}.{vol_msg}"
 
     # ==========================================
     # 4. AUTONOMOUS WEB RESEARCHER
