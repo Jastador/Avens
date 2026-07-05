@@ -6,10 +6,10 @@ from dataclasses import dataclass
 
 from skills.app_catalog import (
     CatalogApp,
-    collapse_equivalent_shortcuts,
+    collapse_equivalent_catalog_apps,
     find_exact_matches,
     normalise_name,
-    scan_start_menu_shortcuts,
+    scan_local_app_catalog,
 )
 
 
@@ -22,8 +22,6 @@ class LaunchResult:
     message: str
 
 
-# These preserve convenient spoken aliases for common apps while the actual
-# shortcut lookup remains exact and deterministic.
 KNOWN_APP_ALIASES: dict[str, str] = {
     normalise_name("discord app"): normalise_name("discord"),
     normalise_name("vs code"): normalise_name("visual studio code"),
@@ -38,11 +36,11 @@ def resolve_catalog_matches(
     *,
     catalog: Iterable[CatalogApp] | None = None,
 ) -> tuple[CatalogApp, ...]:
-    """Find exact local Start Menu matches for one spoken app request."""
+    """Find exact local catalog matches for one spoken app request."""
     entries = (
         tuple(catalog)
         if catalog is not None
-        else scan_start_menu_shortcuts()
+        else scan_local_app_catalog()
     )
 
     normalized_request = normalise_name(requested_name)
@@ -50,19 +48,22 @@ def resolve_catalog_matches(
     if not normalized_request:
         return ()
 
-    catalog_name = KNOWN_APP_ALIASES.get(
+    matches = find_exact_matches(
         normalized_request,
-        normalized_request,
+        entries,
     )
 
-    matches = find_exact_matches(catalog_name, entries)
+    if not matches:
+        alias_name = KNOWN_APP_ALIASES.get(
+            normalized_request,
+            normalized_request,
+        )
+        matches = find_exact_matches(alias_name, entries)
 
-    # Most apps have one shortcut, so avoid reading shortcut targets unless
-    # duplicate names actually need resolving.
     if len(matches) <= 1:
         return matches
 
-    return collapse_equivalent_shortcuts(matches)
+    return collapse_equivalent_catalog_apps(matches)
 
 
 def launch_catalog_app(
@@ -71,11 +72,7 @@ def launch_catalog_app(
     catalog: Iterable[CatalogApp] | None = None,
     startfile: Callable[[str], object] | None = None,
 ) -> LaunchResult:
-    """Launch one exact Start Menu shortcut without shell commands.
-
-    Zero matches are reported honestly. Multiple matches are refused rather
-    than guessed. Only one exact match is allowed to launch.
-    """
+    """Launch one exact local catalog target without shell commands."""
     matches = resolve_catalog_matches(
         requested_name,
         catalog=catalog,
@@ -88,7 +85,7 @@ def launch_catalog_app(
             success=False,
             display_name=display_name,
             message=(
-                f"I could not find an exact Start Menu app named "
+                f"I could not find an exact local app named "
                 f"{display_name}, sir."
             ),
         )
@@ -98,9 +95,9 @@ def launch_catalog_app(
             success=False,
             display_name=matches[0].display_name,
             message=(
-                f"I found {len(matches)} exact Start Menu shortcuts named "
-                f"{matches[0].display_name}. I will not guess which one "
-                "to open, sir."
+                f"I found {len(matches)} exact local apps named "
+                f"{matches[0].display_name}. I will not guess which "
+                "one to open, sir."
             ),
         )
 
@@ -117,7 +114,7 @@ def launch_catalog_app(
         )
 
     try:
-        launcher(str(app.shortcut_path))
+        launcher(str(app.launch_path))
     except OSError as error:
         return LaunchResult(
             success=False,
