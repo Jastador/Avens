@@ -230,6 +230,7 @@ class AppCatalogTests(unittest.TestCase):
                         raw_target=str(executable),
                     ),
                 ),
+                include_packaged=False,
             )
 
         self.assertEqual(
