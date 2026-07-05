@@ -92,6 +92,13 @@ class NamedWindowResult:
     success: bool
     message: str
 
+@dataclass(frozen=True)
+class NamedWindowMatchResult:
+    """Current exact matching windows for one discovered app."""
+
+    display_name: str
+    window_handles: tuple[int, ...]
+    error_message: str | None
 
 _SHOW_COMMANDS = {
     "minimize": win32con.SW_MINIMIZE,
@@ -271,6 +278,16 @@ def _set_foreground_window(
 
     return bool(_USER32.SetForegroundWindow(window_handle))
 
+def _post_close_message(
+    window_handle: int,
+) -> None:
+    """Post a normal WM_CLOSE request without force-killing a process."""
+    win32gui.PostMessage(
+        window_handle,
+        win32con.WM_CLOSE,
+        0,
+        0,
+    )
 
 def build_window_app_identity(
     app: CatalogApp,
@@ -393,6 +410,82 @@ def find_matching_windows(
 
     return tuple(matching_handles)
 
+def inspect_named_app_windows(
+    app: CatalogApp,
+    *,
+    resolve_launch_target: Callable[
+        [CatalogApp],
+        LaunchTarget | None,
+    ] = resolve_catalog_launch_target,
+    list_top_level_windows: Callable[
+        [],
+        tuple[int, ...],
+    ] = _list_top_level_windows,
+    is_window: Callable[[int], bool] = win32gui.IsWindow,
+    is_window_visible: Callable[[int], bool] = (
+        win32gui.IsWindowVisible
+    ),
+    get_window_owner: Callable[[int], int] = _get_window_owner,
+    get_window_process_id: Callable[
+        [int],
+        int,
+    ] = _get_window_process_id,
+    get_process_image_path: Callable[
+        [int],
+        str | None,
+    ] = _query_process_image_path,
+    get_process_aumid: Callable[
+        [int],
+        str | None,
+    ] = _query_process_aumid,
+) -> NamedWindowMatchResult:
+    """Inspect current exact app windows without controlling them."""
+    display_name = app.display_name.strip() or "that app"
+
+    try:
+        identity = build_window_app_identity(
+            app,
+            resolve_launch_target=resolve_launch_target,
+        )
+    except (OSError, pywintypes.error):
+        identity = None
+
+    if identity is None:
+        return NamedWindowMatchResult(
+            display_name=display_name,
+            window_handles=(),
+            error_message=(
+                f"I could not safely identify windows for "
+                f"{display_name}, sir."
+            ),
+        )
+
+    try:
+        matching_windows = find_matching_windows(
+            identity,
+            list_top_level_windows=list_top_level_windows,
+            is_window=is_window,
+            is_window_visible=is_window_visible,
+            get_window_owner=get_window_owner,
+            get_window_process_id=get_window_process_id,
+            get_process_image_path=get_process_image_path,
+            get_process_aumid=get_process_aumid,
+        )
+    except (OSError, pywintypes.error):
+        return NamedWindowMatchResult(
+            display_name=identity.display_name,
+            window_handles=(),
+            error_message=(
+                f"I could not inspect open windows for "
+                f"{identity.display_name}, sir."
+            ),
+        )
+
+    return NamedWindowMatchResult(
+        display_name=identity.display_name,
+        window_handles=matching_windows,
+        error_message=None,
+    )
 
 def control_named_window(
     app: CatalogApp,
@@ -439,48 +532,32 @@ def control_named_window(
             message="I cannot perform that named-window action, sir.",
         )
 
-    try:
-        identity = build_window_app_identity(
-            app,
-            resolve_launch_target=resolve_launch_target,
-        )
-    except (OSError, pywintypes.error):
-        identity = None
+    match_result = inspect_named_app_windows(
+        app,
+        resolve_launch_target=resolve_launch_target,
+        list_top_level_windows=list_top_level_windows,
+        is_window=is_window,
+        is_window_visible=is_window_visible,
+        get_window_owner=get_window_owner,
+        get_window_process_id=get_window_process_id,
+        get_process_image_path=get_process_image_path,
+        get_process_aumid=get_process_aumid,
+    )
 
-    if identity is None:
+    if match_result.error_message is not None:
         return NamedWindowResult(
             success=False,
-            message=(
-                f"I could not safely identify windows for "
-                f"{app.display_name}, sir."
-            ),
+            message=match_result.error_message,
         )
 
-    try:
-        matching_windows = find_matching_windows(
-            identity,
-            list_top_level_windows=list_top_level_windows,
-            is_window=is_window,
-            is_window_visible=is_window_visible,
-            get_window_owner=get_window_owner,
-            get_window_process_id=get_window_process_id,
-            get_process_image_path=get_process_image_path,
-            get_process_aumid=get_process_aumid,
-        )
-    except (OSError, pywintypes.error):
-        return NamedWindowResult(
-            success=False,
-            message=(
-                f"I could not inspect open windows for "
-                f"{identity.display_name}, sir."
-            ),
-        )
+    display_name = match_result.display_name
+    matching_windows = match_result.window_handles
 
     if not matching_windows:
         return NamedWindowResult(
             success=False,
             message=(
-                f"{identity.display_name} is not currently open, sir."
+                f"{display_name} is not currently open, sir."
             ),
         )
 
@@ -489,7 +566,7 @@ def control_named_window(
             success=False,
             message=(
                 f"I found {len(matching_windows)} "
-                f"{identity.display_name} windows. I will not guess "
+                f"{display_name} windows. I will not guess "
                 f"which one to {_ACTION_PHRASES[action_key]}, sir."
             ),
         )
@@ -511,7 +588,7 @@ def control_named_window(
                     return NamedWindowResult(
                         success=False,
                         message=(
-                            f"I restored {identity.display_name}, but "
+                            f"I restored {display_name}, but "
                             "Windows would not bring it to the "
                             "foreground, sir."
                         ),
@@ -521,7 +598,7 @@ def control_named_window(
                     success=False,
                     message=(
                         f"Windows would not bring "
-                        f"{identity.display_name} to the foreground, "
+                        f"{display_name} to the foreground, "
                         "sir."
                     ),
                 )
@@ -529,7 +606,7 @@ def control_named_window(
             return NamedWindowResult(
                 success=True,
                 message=(
-                    f"Brought {identity.display_name} to the "
+                    f"Brought {display_name} to the "
                     "foreground, sir."
                 ),
             )
@@ -543,7 +620,7 @@ def control_named_window(
             success=False,
             message=(
                 f"I could not {_ACTION_PHRASES[action_key]} "
-                f"{identity.display_name}, sir."
+                f"{display_name}, sir."
             ),
         )
 
@@ -555,5 +632,131 @@ def control_named_window(
 
     return NamedWindowResult(
         success=True,
-        message=f"{success_verb} {identity.display_name}, sir.",
+        message=f"{success_verb} {display_name}, sir.",
+    )
+
+def close_named_app_windows(
+    app: CatalogApp,
+    close_all: bool,
+    *,
+    resolve_launch_target: Callable[
+        [CatalogApp],
+        LaunchTarget | None,
+    ] = resolve_catalog_launch_target,
+    list_top_level_windows: Callable[
+        [],
+        tuple[int, ...],
+    ] = _list_top_level_windows,
+    is_window: Callable[[int], bool] = win32gui.IsWindow,
+    is_window_visible: Callable[[int], bool] = (
+        win32gui.IsWindowVisible
+    ),
+    get_window_owner: Callable[[int], int] = _get_window_owner,
+    get_window_process_id: Callable[
+        [int],
+        int,
+    ] = _get_window_process_id,
+    get_process_image_path: Callable[
+        [int],
+        str | None,
+    ] = _query_process_image_path,
+    get_process_aumid: Callable[
+        [int],
+        str | None,
+    ] = _query_process_aumid,
+    post_close_message: Callable[[int], object] = (
+        _post_close_message
+    ),
+) -> NamedWindowResult:
+    """Send normal WM_CLOSE requests to current exact matching windows."""
+    match_result = inspect_named_app_windows(
+        app,
+        resolve_launch_target=resolve_launch_target,
+        list_top_level_windows=list_top_level_windows,
+        is_window=is_window,
+        is_window_visible=is_window_visible,
+        get_window_owner=get_window_owner,
+        get_window_process_id=get_window_process_id,
+        get_process_image_path=get_process_image_path,
+        get_process_aumid=get_process_aumid,
+    )
+
+    if match_result.error_message is not None:
+        return NamedWindowResult(
+            success=False,
+            message=match_result.error_message,
+        )
+
+    display_name = match_result.display_name
+    matching_windows = match_result.window_handles
+
+    if not matching_windows:
+        return NamedWindowResult(
+            success=False,
+            message=(
+                f"{display_name} is not currently open, sir."
+            ),
+        )
+
+    if not close_all and len(matching_windows) > 1:
+        return NamedWindowResult(
+            success=False,
+            message=(
+                f"I found {len(matching_windows)} "
+                f"{display_name} windows. I will not guess "
+                "which one to close, sir."
+            ),
+        )
+
+    windows_to_close = (
+        matching_windows
+        if close_all
+        else (matching_windows[0],)
+    )
+
+    sent_count = 0
+
+    for window_handle in windows_to_close:
+        try:
+            post_close_message(window_handle)
+        except (OSError, pywintypes.error):
+            if sent_count:
+                return NamedWindowResult(
+                    success=False,
+                    message=(
+                        f"I sent close requests to {sent_count} of "
+                        f"{len(windows_to_close)} {display_name} "
+                        "windows before Windows rejected the rest, "
+                        "sir."
+                    ),
+                )
+
+            return NamedWindowResult(
+                success=False,
+                message=(
+                    f"I could not send a close request to "
+                    f"{display_name}, sir."
+                ),
+            )
+
+        sent_count += 1
+
+    if close_all:
+        window_word = (
+            "window"
+            if sent_count == 1
+            else "windows"
+        )
+
+        return NamedWindowResult(
+            success=True,
+            message=(
+                f"Sent close requests to {sent_count} "
+                f"{display_name} {window_word}, sir."
+            ),
+        )
+
+    return NamedWindowResult(
+        success=True,
+        message=f"Sent a close request to {display_name}, sir.",
     )

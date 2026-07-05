@@ -13,6 +13,7 @@ from skills.app_catalog import (
 )
 from skills.named_window import (
     build_window_app_identity,
+    close_named_app_windows,
     control_named_window,
 )
 
@@ -101,6 +102,64 @@ class NamedWindowControlTests(unittest.TestCase):
         return control_named_window(
             self._chrome_app(),
             action,
+            **options,
+        )
+
+    def _close_chrome(
+        self,
+        close_all: bool,
+        **overrides: object,
+    ):
+        target = self._chrome_target()
+        handles = tuple(
+            overrides.pop("handles", (101,))
+        )
+        valid_handles = set(
+            overrides.pop("valid_handles", handles)
+        )
+        visible_handles = set(
+            overrides.pop("visible_handles", handles)
+        )
+        owned_handles = set(
+            overrides.pop("owned_handles", ())
+        )
+        window_processes = dict(
+            overrides.pop(
+                "window_processes",
+                {101: 5001},
+            )
+        )
+        process_paths = dict(
+            overrides.pop(
+                "process_paths",
+                {5001: target.target_path},
+            )
+        )
+
+        options = {
+            "resolve_launch_target": lambda _: target,
+            "list_top_level_windows": lambda: handles,
+            "is_window": lambda handle: handle in valid_handles,
+            "is_window_visible": (
+                lambda handle: handle in visible_handles
+            ),
+            "get_window_owner": (
+                lambda handle: 1 if handle in owned_handles else 0
+            ),
+            "get_window_process_id": (
+                lambda handle: window_processes.get(handle, 0)
+            ),
+            "get_process_image_path": (
+                lambda process_id: process_paths.get(process_id)
+            ),
+            "get_process_aumid": lambda _: None,
+            "post_close_message": lambda _: None,
+        }
+        options.update(overrides)
+
+        return close_named_app_windows(
+            self._chrome_app(),
+            close_all,
             **options,
         )
 
@@ -352,6 +411,113 @@ class NamedWindowControlTests(unittest.TestCase):
             ),
         )
         self.assertEqual(foreground_calls, [101])
+
+    def test_sends_close_request_to_one_exact_window(self):
+        close_calls: list[int] = []
+
+        result = self._close_chrome(
+            False,
+            post_close_message=lambda handle: (
+                close_calls.append(handle)
+            ),
+        )
+
+        self.assertTrue(result.success)
+        self.assertEqual(
+            result.message,
+            "Sent a close request to Google Chrome, sir.",
+        )
+        self.assertEqual(close_calls, [101])
+
+    def test_refuses_single_close_when_multiple_windows_match(self):
+        def forbidden_close(_: int) -> None:
+            self.fail(
+                "Ambiguous single-window close must not send WM_CLOSE."
+            )
+
+        result = self._close_chrome(
+            False,
+            handles=(101, 102),
+            window_processes={
+                101: 5001,
+                102: 5002,
+            },
+            process_paths={
+                5001: self._chrome_target().target_path,
+                5002: self._chrome_target().target_path,
+            },
+            post_close_message=forbidden_close,
+        )
+
+        self.assertFalse(result.success)
+        self.assertEqual(
+            result.message,
+            (
+                "I found 2 Google Chrome windows. I will not "
+                "guess which one to close, sir."
+            ),
+        )
+
+    def test_sends_close_requests_to_all_exact_windows(self):
+        close_calls: list[int] = []
+
+        result = self._close_chrome(
+            True,
+            handles=(101, 102),
+            window_processes={
+                101: 5001,
+                102: 5002,
+            },
+            process_paths={
+                5001: self._chrome_target().target_path,
+                5002: self._chrome_target().target_path,
+            },
+            post_close_message=lambda handle: (
+                close_calls.append(handle)
+            ),
+        )
+
+        self.assertTrue(result.success)
+        self.assertEqual(
+            result.message,
+            (
+                "Sent close requests to 2 Google Chrome windows, sir."
+            ),
+        )
+        self.assertEqual(close_calls, [101, 102])
+
+    def test_reports_partial_close_request_failure(self):
+        close_calls: list[int] = []
+
+        def fail_on_second_window(window_handle: int) -> None:
+            close_calls.append(window_handle)
+
+            if window_handle == 102:
+                raise OSError("Windows rejected the request.")
+
+        result = self._close_chrome(
+            True,
+            handles=(101, 102),
+            window_processes={
+                101: 5001,
+                102: 5002,
+            },
+            process_paths={
+                5001: self._chrome_target().target_path,
+                5002: self._chrome_target().target_path,
+            },
+            post_close_message=fail_on_second_window,
+        )
+
+        self.assertFalse(result.success)
+        self.assertEqual(
+            result.message,
+            (
+                "I sent close requests to 1 of 2 Google Chrome "
+                "windows before Windows rejected the rest, sir."
+            ),
+        )
+        self.assertEqual(close_calls, [101, 102])
 
     def test_handles_windows_api_failure_safely(self):
         def failing_show_window(_: int, __: int) -> int:
