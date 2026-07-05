@@ -494,6 +494,78 @@ class LocalSkillsRouterTests(unittest.TestCase):
         self.assertEqual(requested_names, ["Discord"])
         self.assertEqual(result.message, "Opening Discord, sir.")
 
+    def test_routes_launch_request_after_punctuation(self):
+        requested_names: list[str] = []
+
+        def fake_launch(requested_name: str) -> LaunchResult:
+            requested_names.append(requested_name)
+
+            return LaunchResult(
+                success=True,
+                display_name=requested_name,
+                message=f"Opening {requested_name}, sir.",
+            )
+
+        cases = {
+            "Open. Calculator": "Calculator",
+            "Open: 7 Zip": "7 Zip",
+            "Open, Discord": "Discord",
+        }
+
+        for user_input, expected_name in cases.items():
+            with self.subTest(user_input=user_input):
+                result = route_local_skill(
+                    user_input,
+                    launch_app=fake_launch,
+                )
+
+                self.assertIsNotNone(result)
+                self.assertTrue(result.handled)
+                self.assertEqual(
+                    result.skill_name,
+                    OPEN_APP_SKILL.name,
+                )
+                self.assertEqual(
+                    result.message,
+                    f"Opening {expected_name}, sir.",
+                )
+
+        self.assertEqual(
+            requested_names,
+            ["Calculator", "7 Zip", "Discord"],
+        )
+
+    def test_routes_punctuated_unknown_app_to_safe_launcher_result(self):
+        requested_names: list[str] = []
+
+        def fake_launch(requested_name: str) -> LaunchResult:
+            requested_names.append(requested_name)
+
+            return LaunchResult(
+                success=False,
+                display_name=requested_name,
+                message=(
+                    f"I could not find an exact local app named "
+                    f"{requested_name}, sir."
+                ),
+            )
+
+        result = route_local_skill(
+            "Open. Seven.",
+            launch_app=fake_launch,
+        )
+
+        self.assertIsNotNone(result)
+        self.assertTrue(result.handled)
+        self.assertEqual(
+            requested_names,
+            ["Seven"],
+        )
+        self.assertIn(
+            "could not find an exact local app",
+            result.message.lower(),
+        )
+
     def test_routes_common_stt_connector_prefix(self):
         requested_names: list[str] = []
 
