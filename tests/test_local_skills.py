@@ -4,6 +4,7 @@ import tempfile
 import unittest
 from unittest.mock import patch
 from pathlib import Path
+from skills.active_window import ActiveWindowResult
 from skills.app_catalog import (
     APP_PATHS_SOURCE,
     START_MENU_SOURCE,
@@ -25,6 +26,7 @@ from skills.app_launcher import (
     resolve_catalog_matches,
 )
 from skills.router import (
+    ACTIVE_WINDOW_CONTROL_SKILL,
     OPEN_APP_SKILL,
     REFRESH_APP_CATALOG_SKILL,
     route_local_skill,
@@ -463,6 +465,106 @@ class AppLauncherTests(unittest.TestCase):
         self.assertEqual(result.message, "Opening Steam, sir.")
 
 class LocalSkillsRouterTests(unittest.TestCase):
+    def test_active_window_control_skill_is_explicit_and_local(self):
+        self.assertEqual(
+            ACTIVE_WINDOW_CONTROL_SKILL.name,
+            "control_active_window",
+        )
+        self.assertTrue(ACTIVE_WINDOW_CONTROL_SKILL.offline)
+        self.assertFalse(
+            ACTIVE_WINDOW_CONTROL_SKILL.requires_confirmation
+        )
+        self.assertEqual(
+            ACTIVE_WINDOW_CONTROL_SKILL.allowed_arguments,
+            (
+                "minimize",
+                "maximize",
+                "restore",
+            ),
+        )
+
+    def test_routes_explicit_active_window_control_requests(self):
+        control_calls: list[str] = []
+
+        def fake_control(action: str) -> ActiveWindowResult:
+            control_calls.append(action)
+
+            return ActiveWindowResult(
+                success=True,
+                message=f"Handled {action}, sir.",
+            )
+
+        def forbidden_launch(_: str) -> LaunchResult:
+            self.fail(
+                "Window-control commands must not reach app launching."
+            )
+
+        def forbidden_refresh() -> None:
+            self.fail(
+                "Window-control commands must not refresh app catalogs."
+            )
+
+        cases = {
+            "Minimize this": "minimize",
+            "Maximize this.": "maximize",
+            "Can you please restore this?": "restore",
+            "Then maximize this please": "maximize",
+        }
+
+        for user_input, expected_action in cases.items():
+            with self.subTest(user_input=user_input):
+                result = route_local_skill(
+                    user_input,
+                    launch_app=forbidden_launch,
+                    refresh_catalog=forbidden_refresh,
+                    control_window=fake_control,
+                )
+
+                self.assertIsNotNone(result)
+                self.assertTrue(result.handled)
+                self.assertEqual(
+                    result.skill_name,
+                    ACTIVE_WINDOW_CONTROL_SKILL.name,
+                )
+                self.assertEqual(
+                    result.message,
+                    f"Handled {expected_action}, sir.",
+                )
+
+        self.assertEqual(
+            control_calls,
+            [
+                "minimize",
+                "maximize",
+                "restore",
+                "maximize",
+            ],
+        )
+
+    def test_ignores_non_explicit_active_window_requests(self):
+        def forbidden_control(_: str) -> ActiveWindowResult:
+            self.fail(
+                "Only explicit '<action> this' requests may control windows."
+            )
+
+        requests = (
+            "Minimize Notepad",
+            "Maximize Chrome",
+            "Restore Discord",
+            "Close this",
+            "Make this fullscreen",
+            "Minimize the window",
+        )
+
+        for user_input in requests:
+            with self.subTest(user_input=user_input):
+                result = route_local_skill(
+                    user_input,
+                    control_window=forbidden_control,
+                )
+
+                self.assertIsNone(result)
+
     def test_open_app_skill_is_explicit_and_local(self):
         self.assertEqual(OPEN_APP_SKILL.name, "open_app")
         self.assertTrue(OPEN_APP_SKILL.offline)

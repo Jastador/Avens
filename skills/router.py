@@ -10,6 +10,10 @@ from skills.app_launcher import (
     launch_catalog_app,
 )
 
+from skills.active_window import (
+    ActiveWindowResult,
+    control_active_window,
+)
 
 @dataclass(frozen=True)
 class LocalSkillDefinition:
@@ -46,6 +50,17 @@ REFRESH_APP_CATALOG_SKILL = LocalSkillDefinition(
     requires_confirmation=False,
 )
 
+ACTIVE_WINDOW_CONTROL_SKILL = LocalSkillDefinition(
+    name="control_active_window",
+    allowed_arguments=(
+        "minimize",
+        "maximize",
+        "restore",
+    ),
+    offline=True,
+    requires_confirmation=False,
+)
+
 APP_LAUNCH_PATTERN = re.compile(
     r"^\s*"
     r"(?:(?:and|or|then)\s+)?"
@@ -75,6 +90,18 @@ APP_CATALOG_REFRESH_PATTERN = re.compile(
     re.IGNORECASE,
 )
 
+ACTIVE_WINDOW_CONTROL_PATTERN = re.compile(
+    r"^\s*"
+    r"(?:(?:and|or|then)\s+)?"
+    r"(?:(?:can|could|would|will)\s+you\s+)?"
+    r"(?:please\s+)?"
+    r"(?P<action>minimize|maximize|restore)"
+    r"\s+this"
+    r"(?:\s+please)?"
+    r"\s*[.!?]*\s*$",
+    re.IGNORECASE,
+)
+
 def _clean_target(target: str) -> str:
     """Remove trailing politeness without guessing an app name."""
     return re.sub(
@@ -90,8 +117,29 @@ def route_local_skill(
     *,
     launch_app: Callable[[str], LaunchResult] = launch_catalog_app,
     refresh_catalog: Callable[[], None] = clear_catalog_cache,
+    control_window: Callable[[str], ActiveWindowResult] = (
+        control_active_window
+    ),
 ) -> SkillResult | None:
     """Handle explicit local skills before AI or legacy tools."""
+    active_window_match = ACTIVE_WINDOW_CONTROL_PATTERN.match(
+        user_input
+    )
+
+    if active_window_match is not None:
+        action = active_window_match.group("action").lower()
+        window_result = control_window(action)
+
+        return SkillResult(
+            handled=True,
+            skill_name=ACTIVE_WINDOW_CONTROL_SKILL.name,
+            message=window_result.message,
+            offline=ACTIVE_WINDOW_CONTROL_SKILL.offline,
+            requires_confirmation=(
+                ACTIVE_WINDOW_CONTROL_SKILL.requires_confirmation
+            ),
+        )
+
     refresh_match = APP_CATALOG_REFRESH_PATTERN.match(user_input)
 
     if refresh_match is not None:
