@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import os
 from collections.abc import Callable, Iterable
+from functools import lru_cache
 from dataclasses import dataclass
 
 from skills.app_catalog import (
@@ -22,6 +23,29 @@ class LaunchResult:
     success: bool
     display_name: str
     message: str
+
+@lru_cache(maxsize=1)
+def _get_regular_catalog() -> tuple[CatalogApp, ...]:
+    """Return one regular app catalog snapshot for this Avens session."""
+    return scan_local_app_catalog(
+        include_packaged=False,
+    )
+
+
+@lru_cache(maxsize=1)
+def _get_packaged_catalog(
+    excluded_normalized_names: frozenset[str],
+) -> tuple[CatalogApp, ...]:
+    """Return one packaged app catalog snapshot for this Avens session."""
+    return scan_packaged_apps(
+        excluded_normalized_names=excluded_normalized_names,
+    )
+
+
+def clear_catalog_cache() -> None:
+    """Forget discovery snapshots before the next local app request."""
+    _get_regular_catalog.cache_clear()
+    _get_packaged_catalog.cache_clear()
 
 def _collapse_matches(
     matches: tuple[CatalogApp, ...],
@@ -92,9 +116,8 @@ def resolve_catalog_matches(
             tuple(catalog),
         )
 
-    regular_catalog = scan_local_app_catalog(
-        include_packaged=False,
-    )
+    regular_catalog = _get_regular_catalog()
+
     regular_exact_matches = _find_exact_matches(
         normalized_request,
         regular_catalog,
@@ -103,11 +126,13 @@ def resolve_catalog_matches(
     if regular_exact_matches:
         return regular_exact_matches
 
-    packaged_catalog = scan_packaged_apps(
-        excluded_normalized_names={
-            app.normalized_name
-            for app in regular_catalog
-        },
+    excluded_normalized_names = frozenset(
+        app.normalized_name
+        for app in regular_catalog
+    )
+
+    packaged_catalog = _get_packaged_catalog(
+        excluded_normalized_names,
     )
     packaged_exact_matches = _find_exact_matches(
         normalized_request,
