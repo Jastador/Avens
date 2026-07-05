@@ -43,7 +43,8 @@ APP_LAUNCH_PATTERN = re.compile(
     r"(?:(?:and|or|then)\s+)?"
     r"(?:(?:can|could|would|will)\s+you\s+)?"
     r"(?:please\s+)?"
-    r"(?:open|launch|start)\s+"
+    r"(?:open|launch|start)"
+    r"(?:\s+|[,:;.!?]+\s*)"
     r"(?:the\s+)?"
     r"(?P<target>.+?)"
     r"\s*[.!?]*\s*$",
