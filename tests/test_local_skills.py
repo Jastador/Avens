@@ -5,6 +5,7 @@ import unittest
 from unittest.mock import patch
 from pathlib import Path
 from skills.active_window import ActiveWindowResult
+from skills.named_window import NamedWindowResult
 from skills.app_catalog import (
     APP_PATHS_SOURCE,
     START_MENU_SOURCE,
@@ -27,6 +28,7 @@ from skills.app_launcher import (
 )
 from skills.router import (
     ACTIVE_WINDOW_CONTROL_SKILL,
+    NAMED_WINDOW_CONTROL_SKILL,
     OPEN_APP_SKILL,
     REFRESH_APP_CATALOG_SKILL,
     route_local_skill,
@@ -483,6 +485,36 @@ class LocalSkillsRouterTests(unittest.TestCase):
             ),
         )
 
+    def test_active_window_route_requires_literal_this(self):
+        def forbidden_active_control(_: str) -> ActiveWindowResult:
+            self.fail(
+                "Non-focused-window commands must not use "
+                "the active-window controller."
+            )
+
+        def forbidden_resolve(_: str) -> tuple[CatalogApp, ...]:
+            self.fail(
+                "Unsupported commands must not resolve named apps."
+            )
+
+        requests = (
+            "Close this",
+            "Make this fullscreen",
+            "Bring Chrome up",
+            "Minimize",
+            "Restore",
+        )
+
+        for user_input in requests:
+            with self.subTest(user_input=user_input):
+                result = route_local_skill(
+                    user_input,
+                    control_window=forbidden_active_control,
+                    resolve_app=forbidden_resolve,
+                )
+
+                self.assertIsNone(result)
+
     def test_routes_explicit_active_window_control_requests(self):
         control_calls: list[str] = []
 
@@ -496,12 +528,17 @@ class LocalSkillsRouterTests(unittest.TestCase):
 
         def forbidden_launch(_: str) -> LaunchResult:
             self.fail(
-                "Window-control commands must not reach app launching."
+                "Focused-window commands must not reach app launching."
             )
 
         def forbidden_refresh() -> None:
             self.fail(
-                "Window-control commands must not refresh app catalogs."
+                "Focused-window commands must not refresh app catalogs."
+            )
+
+        def forbidden_resolve(_: str) -> tuple[CatalogApp, ...]:
+            self.fail(
+                "Focused-window commands must not resolve named apps."
             )
 
         cases = {
@@ -518,6 +555,7 @@ class LocalSkillsRouterTests(unittest.TestCase):
                     launch_app=forbidden_launch,
                     refresh_catalog=forbidden_refresh,
                     control_window=fake_control,
+                    resolve_app=forbidden_resolve,
                 )
 
                 self.assertIsNotNone(result)
@@ -541,26 +579,183 @@ class LocalSkillsRouterTests(unittest.TestCase):
             ],
         )
 
-    def test_ignores_non_explicit_active_window_requests(self):
-        def forbidden_control(_: str) -> ActiveWindowResult:
-            self.fail(
-                "Only explicit '<action> this' requests may control windows."
-            )
-
-        requests = (
-            "Minimize Notepad",
-            "Maximize Chrome",
-            "Restore Discord",
-            "Close this",
-            "Make this fullscreen",
-            "Minimize the window",
+    def test_named_window_control_skill_is_explicit_and_local(self):
+        self.assertEqual(
+            NAMED_WINDOW_CONTROL_SKILL.name,
+            "control_named_window",
+        )
+        self.assertTrue(NAMED_WINDOW_CONTROL_SKILL.offline)
+        self.assertFalse(
+            NAMED_WINDOW_CONTROL_SKILL.requires_confirmation
+        )
+        self.assertEqual(
+            NAMED_WINDOW_CONTROL_SKILL.allowed_arguments,
+            (
+                "minimize",
+                "maximize",
+                "restore",
+                "bring_up",
+                "exact_catalog_app_name",
+            ),
         )
 
-        for user_input in requests:
+    def test_routes_explicit_named_window_control_requests(self):
+        app = CatalogApp(
+            display_name="Google Chrome",
+            normalized_name="google chrome",
+            launch_path=Path("chrome.exe"),
+            source=APP_PATHS_SOURCE,
+        )
+        resolved_names: list[str] = []
+        control_calls: list[tuple[CatalogApp, str]] = []
+
+        def fake_resolve(
+            requested_name: str,
+        ) -> tuple[CatalogApp, ...]:
+            resolved_names.append(requested_name)
+            return (app,)
+
+        def fake_control(
+            resolved_app: CatalogApp,
+            action: str,
+        ) -> NamedWindowResult:
+            control_calls.append((resolved_app, action))
+
+            return NamedWindowResult(
+                success=True,
+                message=f"Handled {action}, sir.",
+            )
+
+        cases = {
+            "Minimize Chrome": "minimize",
+            "Maximize Chrome.": "maximize",
+            "Can you please restore Chrome?": "restore",
+            "Then bring up Chrome please": "bring_up",
+        }
+
+        for user_input, expected_action in cases.items():
             with self.subTest(user_input=user_input):
                 result = route_local_skill(
                     user_input,
-                    control_window=forbidden_control,
+                    resolve_app=fake_resolve,
+                    control_named_app_window=fake_control,
+                )
+
+                self.assertIsNotNone(result)
+                self.assertTrue(result.handled)
+                self.assertEqual(
+                    result.skill_name,
+                    NAMED_WINDOW_CONTROL_SKILL.name,
+                )
+                self.assertEqual(
+                    result.message,
+                    f"Handled {expected_action}, sir.",
+                )
+
+        self.assertEqual(
+            resolved_names,
+            [
+                "Chrome",
+                "Chrome",
+                "Chrome",
+                "Chrome",
+            ],
+        )
+        self.assertEqual(
+            control_calls,
+            [
+                (app, "minimize"),
+                (app, "maximize"),
+                (app, "restore"),
+                (app, "bring_up"),
+            ],
+        )
+
+    def test_named_window_route_refuses_missing_or_ambiguous_apps(self):
+        app_one = CatalogApp(
+            display_name="Google Chrome",
+            normalized_name="google chrome",
+            launch_path=Path("chrome-one.exe"),
+            source=APP_PATHS_SOURCE,
+        )
+        app_two = CatalogApp(
+            display_name="Google Chrome",
+            normalized_name="google chrome",
+            launch_path=Path("chrome-two.exe"),
+            source=APP_PATHS_SOURCE,
+        )
+
+        def forbidden_control(
+            _: CatalogApp,
+            __: str,
+        ) -> NamedWindowResult:
+            self.fail(
+                "Missing or ambiguous apps must not reach window control."
+            )
+
+        missing = route_local_skill(
+            "Minimize Unknown App",
+            resolve_app=lambda _: (),
+            control_named_app_window=forbidden_control,
+        )
+
+        self.assertIsNotNone(missing)
+        self.assertTrue(missing.handled)
+        self.assertIn(
+            "could not find an exact local app",
+            missing.message.lower(),
+        )
+
+        ambiguous = route_local_skill(
+            "Restore Chrome",
+            resolve_app=lambda _: (app_one, app_two),
+            control_named_app_window=forbidden_control,
+        )
+
+        self.assertIsNotNone(ambiguous)
+        self.assertTrue(ambiguous.handled)
+        self.assertEqual(
+            ambiguous.message,
+            (
+                "I found 2 exact local apps named Google Chrome. "
+                "I will not guess which one to control, sir."
+            ),
+        )
+
+    def test_named_window_route_does_not_intercept_other_commands(self):
+        def forbidden_resolve(_: str) -> tuple[CatalogApp, ...]:
+            self.fail(
+                "Non-matching commands must not resolve named apps."
+            )
+
+        def fake_active_control(action: str) -> ActiveWindowResult:
+            return ActiveWindowResult(
+                success=True,
+                message=f"Focused {action}, sir.",
+            )
+
+        focused_result = route_local_skill(
+            "Minimize this",
+            control_window=fake_active_control,
+            resolve_app=forbidden_resolve,
+        )
+
+        self.assertIsNotNone(focused_result)
+        self.assertEqual(
+            focused_result.skill_name,
+            ACTIVE_WINDOW_CONTROL_SKILL.name,
+        )
+
+        for user_input in (
+            "Close Chrome",
+            "Show Chrome",
+            "Bring Chrome up",
+            "Make Chrome fullscreen",
+        ):
+            with self.subTest(user_input=user_input):
+                result = route_local_skill(
+                    user_input,
+                    resolve_app=forbidden_resolve,
                 )
 
                 self.assertIsNone(result)

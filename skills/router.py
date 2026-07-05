@@ -8,11 +8,18 @@ from skills.app_launcher import (
     LaunchResult,
     clear_catalog_cache,
     launch_catalog_app,
+    resolve_catalog_matches,
 )
 
 from skills.active_window import (
     ActiveWindowResult,
     control_active_window,
+)
+
+from skills.app_catalog import CatalogApp
+from skills.named_window import (
+    NamedWindowResult,
+    control_named_window,
 )
 
 @dataclass(frozen=True)
@@ -61,6 +68,19 @@ ACTIVE_WINDOW_CONTROL_SKILL = LocalSkillDefinition(
     requires_confirmation=False,
 )
 
+NAMED_WINDOW_CONTROL_SKILL = LocalSkillDefinition(
+    name="control_named_window",
+    allowed_arguments=(
+        "minimize",
+        "maximize",
+        "restore",
+        "bring_up",
+        "exact_catalog_app_name",
+    ),
+    offline=True,
+    requires_confirmation=False,
+)
+
 APP_LAUNCH_PATTERN = re.compile(
     r"^\s*"
     r"(?:(?:and|or|then)\s+)?"
@@ -102,6 +122,20 @@ ACTIVE_WINDOW_CONTROL_PATTERN = re.compile(
     re.IGNORECASE,
 )
 
+NAMED_WINDOW_CONTROL_PATTERN = re.compile(
+    r"^\s*"
+    r"(?:(?:and|or|then)\s+)?"
+    r"(?:(?:can|could|would|will)\s+you\s+)?"
+    r"(?:please\s+)?"
+    r"(?P<action>minimize|maximize|restore|bring\s+up)"
+    r"(?:\s+|[,:;.!?]+\s*)"
+    r"(?:the\s+)?"
+    r"(?P<target>.+?)"
+    r"(?:\s+please)?"
+    r"\s*[.!?]*\s*$",
+    re.IGNORECASE,
+)
+
 def _clean_target(target: str) -> str:
     """Remove trailing politeness without guessing an app name."""
     return re.sub(
@@ -120,6 +154,14 @@ def route_local_skill(
     control_window: Callable[[str], ActiveWindowResult] = (
         control_active_window
     ),
+    resolve_app: Callable[
+        [str],
+        tuple[CatalogApp, ...],
+    ] = resolve_catalog_matches,
+    control_named_app_window: Callable[
+        [CatalogApp, str],
+        NamedWindowResult,
+    ] = control_named_window,
 ) -> SkillResult | None:
     """Handle explicit local skills before AI or legacy tools."""
     active_window_match = ACTIVE_WINDOW_CONTROL_PATTERN.match(
@@ -137,6 +179,69 @@ def route_local_skill(
             offline=ACTIVE_WINDOW_CONTROL_SKILL.offline,
             requires_confirmation=(
                 ACTIVE_WINDOW_CONTROL_SKILL.requires_confirmation
+            ),
+        )
+
+    named_window_match = NAMED_WINDOW_CONTROL_PATTERN.match(
+        user_input
+    )
+
+    if named_window_match is not None:
+        action = (
+            named_window_match.group("action")
+            .casefold()
+            .replace(" ", "_")
+        )
+        requested_name = _clean_target(
+            named_window_match.group("target")
+        )
+        matches = resolve_app(requested_name)
+
+        if not matches:
+            display_name = requested_name or "that app"
+
+            return SkillResult(
+                handled=True,
+                skill_name=NAMED_WINDOW_CONTROL_SKILL.name,
+                message=(
+                    f"I could not find an exact local app named "
+                    f"{display_name}, sir."
+                ),
+                offline=NAMED_WINDOW_CONTROL_SKILL.offline,
+                requires_confirmation=(
+                    NAMED_WINDOW_CONTROL_SKILL
+                    .requires_confirmation
+                ),
+            )
+
+        if len(matches) > 1:
+            return SkillResult(
+                handled=True,
+                skill_name=NAMED_WINDOW_CONTROL_SKILL.name,
+                message=(
+                    f"I found {len(matches)} exact local apps named "
+                    f"{matches[0].display_name}. I will not guess "
+                    "which one to control, sir."
+                ),
+                offline=NAMED_WINDOW_CONTROL_SKILL.offline,
+                requires_confirmation=(
+                    NAMED_WINDOW_CONTROL_SKILL
+                    .requires_confirmation
+                ),
+            )
+
+        window_result = control_named_app_window(
+            matches[0],
+            action,
+        )
+
+        return SkillResult(
+            handled=True,
+            skill_name=NAMED_WINDOW_CONTROL_SKILL.name,
+            message=window_result.message,
+            offline=NAMED_WINDOW_CONTROL_SKILL.offline,
+            requires_confirmation=(
+                NAMED_WINDOW_CONTROL_SKILL.requires_confirmation
             ),
         )
 
