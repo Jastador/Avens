@@ -13,7 +13,7 @@ from skills.app_catalog import (
     scan_local_app_catalog,
     scan_packaged_apps,
 )
-
+from skills.app_aliases import resolve_alias_target
 
 @dataclass(frozen=True)
 class LaunchResult:
@@ -22,16 +22,6 @@ class LaunchResult:
     success: bool
     display_name: str
     message: str
-
-
-KNOWN_APP_ALIASES: dict[str, str] = {
-    normalise_name("discord app"): normalise_name("discord"),
-    normalise_name("vs code"): normalise_name("visual studio code"),
-    normalise_name("vscode"): normalise_name("visual studio code"),
-    normalise_name("chrome"): normalise_name("google chrome"),
-    normalise_name("chrome browser"): normalise_name("google chrome"),
-}
-
 
 def _collapse_matches(
     matches: tuple[CatalogApp, ...],
@@ -56,13 +46,8 @@ def _find_exact_matches(
 def _alias_for(
     normalized_name: str,
 ) -> str | None:
-    """Return a known exact alias target, never a fuzzy substitute."""
-    alias_name = KNOWN_APP_ALIASES.get(normalized_name)
-
-    if alias_name is None or alias_name == normalized_name:
-        return None
-
-    return alias_name
+    """Return a configured exact alias target, never a fuzzy substitute."""
+    return resolve_alias_target(normalized_name)
 
 
 def _resolve_matches_from_catalog(
