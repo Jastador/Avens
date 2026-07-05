@@ -5,7 +5,11 @@ import unittest
 from unittest.mock import patch
 from pathlib import Path
 from skills.active_window import ActiveWindowResult
-from skills.named_window import NamedWindowResult
+from skills.close_confirmation import CloseConfirmationStore
+from skills.named_window import (
+    NamedWindowMatchResult,
+    NamedWindowResult,
+)
 from skills.app_catalog import (
     APP_PATHS_SOURCE,
     START_MENU_SOURCE,
@@ -28,6 +32,7 @@ from skills.app_launcher import (
 )
 from skills.router import (
     ACTIVE_WINDOW_CONTROL_SKILL,
+    NAMED_WINDOW_CLOSE_SKILL,
     NAMED_WINDOW_CONTROL_SKILL,
     OPEN_APP_SKILL,
     REFRESH_APP_CATALOG_SKILL,
@@ -579,6 +584,278 @@ class LocalSkillsRouterTests(unittest.TestCase):
             ],
         )
 
+    def test_named_window_close_skill_requires_confirmation(self):
+        self.assertEqual(
+            NAMED_WINDOW_CLOSE_SKILL.name,
+            "close_named_window",
+        )
+        self.assertTrue(NAMED_WINDOW_CLOSE_SKILL.offline)
+        self.assertTrue(
+            NAMED_WINDOW_CLOSE_SKILL.requires_confirmation
+        )
+        self.assertEqual(
+            NAMED_WINDOW_CLOSE_SKILL.allowed_arguments,
+            (
+                "close",
+                "close_all",
+                "exact_catalog_app_name",
+            ),
+        )
+
+    def test_close_request_requires_confirmation_before_wm_close(self):
+        app = CatalogApp(
+            display_name="Google Chrome",
+            normalized_name="google chrome",
+            launch_path=Path("chrome.exe"),
+            source=APP_PATHS_SOURCE,
+        )
+        close_calls: list[tuple[CatalogApp, bool]] = []
+        store = CloseConfirmationStore(
+            clock=lambda: 100.0,
+        )
+
+        result = route_local_skill(
+            "Close Chrome",
+            resolve_app=lambda _: (app,),
+            inspect_app_windows=lambda _: NamedWindowMatchResult(
+                display_name="Google Chrome",
+                window_handles=(101,),
+                error_message=None,
+            ),
+            close_app_windows=lambda resolved_app, close_all: (
+                close_calls.append((resolved_app, close_all))
+                or NamedWindowResult(
+                    success=True,
+                    message="Should not run yet.",
+                )
+            ),
+            close_confirmations=store,
+        )
+
+        self.assertIsNotNone(result)
+        self.assertTrue(result.handled)
+        self.assertEqual(
+            result.skill_name,
+            NAMED_WINDOW_CLOSE_SKILL.name,
+        )
+        self.assertEqual(
+            result.message,
+            (
+                'I found 1 Google Chrome window. Say '
+                '"Confirm close Chrome" to continue, sir.'
+            ),
+        )
+        self.assertEqual(close_calls, [])
+
+    def test_close_all_request_requires_confirmation(self):
+        app = CatalogApp(
+            display_name="Google Chrome",
+            normalized_name="google chrome",
+            launch_path=Path("chrome.exe"),
+            source=APP_PATHS_SOURCE,
+        )
+        store = CloseConfirmationStore(
+            clock=lambda: 100.0,
+        )
+
+        result = route_local_skill(
+            "Close all Chrome windows",
+            resolve_app=lambda _: (app,),
+            inspect_app_windows=lambda _: NamedWindowMatchResult(
+                display_name="Google Chrome",
+                window_handles=(101, 102),
+                error_message=None,
+            ),
+            close_confirmations=store,
+        )
+
+        self.assertIsNotNone(result)
+        self.assertEqual(
+            result.message,
+            (
+                'I found 2 Google Chrome windows. Say '
+                '"Confirm close all Chrome windows" to continue, sir.'
+            ),
+        )
+
+    def test_confirmation_rechecks_and_sends_named_close(self):
+        app = CatalogApp(
+            display_name="Google Chrome",
+            normalized_name="google chrome",
+            launch_path=Path("chrome.exe"),
+            source=APP_PATHS_SOURCE,
+        )
+        close_calls: list[tuple[CatalogApp, bool]] = []
+        store = CloseConfirmationStore(
+            clock=lambda: 100.0,
+        )
+
+        first_result = route_local_skill(
+            "Close Chrome",
+            resolve_app=lambda _: (app,),
+            inspect_app_windows=lambda _: NamedWindowMatchResult(
+                display_name="Google Chrome",
+                window_handles=(101,),
+                error_message=None,
+            ),
+            close_confirmations=store,
+        )
+
+        self.assertIsNotNone(first_result)
+
+        confirm_result = route_local_skill(
+            "Confirm, close Chrome",
+            resolve_app=lambda _: (app,),
+            close_app_windows=lambda resolved_app, close_all: (
+                close_calls.append((resolved_app, close_all))
+                or NamedWindowResult(
+                    success=True,
+                    message=(
+                        "Sent a close request to Google Chrome, sir."
+                    ),
+                )
+            ),
+            close_confirmations=store,
+        )
+
+        self.assertIsNotNone(confirm_result)
+        self.assertEqual(
+            confirm_result.message,
+            "Sent a close request to Google Chrome, sir.",
+        )
+        self.assertEqual(close_calls, [(app, False)])
+
+    def test_confirmation_rejects_bare_yes_and_mismatch(self):
+        app = CatalogApp(
+            display_name="Google Chrome",
+            normalized_name="google chrome",
+            launch_path=Path("chrome.exe"),
+            source=APP_PATHS_SOURCE,
+        )
+        close_calls: list[tuple[CatalogApp, bool]] = []
+        store = CloseConfirmationStore(
+            clock=lambda: 100.0,
+        )
+
+        request_result = route_local_skill(
+            "Close Chrome",
+            resolve_app=lambda _: (app,),
+            inspect_app_windows=lambda _: NamedWindowMatchResult(
+                display_name="Google Chrome",
+                window_handles=(101,),
+                error_message=None,
+            ),
+            close_confirmations=store,
+        )
+
+        self.assertIsNotNone(request_result)
+
+        bare_yes_result = route_local_skill(
+            "Yes",
+            close_app_windows=lambda resolved_app, close_all: (
+                close_calls.append((resolved_app, close_all))
+                or NamedWindowResult(
+                    success=True,
+                    message="Should not run.",
+                )
+            ),
+            close_confirmations=store,
+        )
+
+        self.assertIsNone(bare_yes_result)
+        self.assertEqual(close_calls, [])
+
+        mismatch_result = route_local_skill(
+            "Confirm close Notepad",
+            close_confirmations=store,
+        )
+
+        self.assertIsNotNone(mismatch_result)
+        self.assertEqual(
+            mismatch_result.message,
+            (
+                "That confirmation did not match the pending close "
+                "request, so I cancelled it, sir."
+            ),
+        )
+        self.assertEqual(close_calls, [])
+
+    def test_cancel_clears_pending_close_request(self):
+        app = CatalogApp(
+            display_name="Google Chrome",
+            normalized_name="google chrome",
+            launch_path=Path("chrome.exe"),
+            source=APP_PATHS_SOURCE,
+        )
+        store = CloseConfirmationStore(
+            clock=lambda: 100.0,
+        )
+
+        route_local_skill(
+            "Close Chrome",
+            resolve_app=lambda _: (app,),
+            inspect_app_windows=lambda _: NamedWindowMatchResult(
+                display_name="Google Chrome",
+                window_handles=(101,),
+                error_message=None,
+            ),
+            close_confirmations=store,
+        )
+
+        cancel_result = route_local_skill(
+            "Cancel",
+            close_confirmations=store,
+        )
+
+        self.assertIsNotNone(cancel_result)
+        self.assertEqual(
+            cancel_result.message,
+            "Pending close request cancelled, sir.",
+        )
+
+        confirm_result = route_local_skill(
+            "Confirm close Chrome",
+            close_confirmations=store,
+        )
+
+        self.assertIsNotNone(confirm_result)
+        self.assertEqual(
+            confirm_result.message,
+            "There is no pending close request to confirm, sir.",
+        )
+
+    def test_close_request_refuses_multiple_windows_without_all(self):
+        app = CatalogApp(
+            display_name="Google Chrome",
+            normalized_name="google chrome",
+            launch_path=Path("chrome.exe"),
+            source=APP_PATHS_SOURCE,
+        )
+        store = CloseConfirmationStore(
+            clock=lambda: 100.0,
+        )
+
+        result = route_local_skill(
+            "Close Chrome",
+            resolve_app=lambda _: (app,),
+            inspect_app_windows=lambda _: NamedWindowMatchResult(
+                display_name="Google Chrome",
+                window_handles=(101, 102),
+                error_message=None,
+            ),
+            close_confirmations=store,
+        )
+
+        self.assertIsNotNone(result)
+        self.assertEqual(
+            result.message,
+            (
+                "I found 2 Google Chrome windows. I will not guess "
+                "which one to close, sir. Ask me to close all "
+                "matching windows instead."
+            ),
+        )
+
     def test_named_window_control_skill_is_explicit_and_local(self):
         self.assertEqual(
             NAMED_WINDOW_CONTROL_SKILL.name,
@@ -747,7 +1024,6 @@ class LocalSkillsRouterTests(unittest.TestCase):
         )
 
         for user_input in (
-            "Close Chrome",
             "Show Chrome",
             "Bring Chrome up",
             "Make Chrome fullscreen",
