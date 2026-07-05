@@ -26,6 +26,7 @@ from skills.app_launcher import (
 )
 from skills.router import (
     OPEN_APP_SKILL,
+    REFRESH_APP_CATALOG_SKILL,
     route_local_skill,
 )
 
@@ -470,6 +471,77 @@ class LocalSkillsRouterTests(unittest.TestCase):
             OPEN_APP_SKILL.allowed_arguments,
             ("exact_start_menu_app_name",),
         )
+
+    def test_refresh_app_catalog_skill_is_explicit_and_local(self):
+        self.assertEqual(
+            REFRESH_APP_CATALOG_SKILL.name,
+            "refresh_app_catalog",
+        )
+        self.assertTrue(REFRESH_APP_CATALOG_SKILL.offline)
+        self.assertFalse(
+            REFRESH_APP_CATALOG_SKILL.requires_confirmation
+        )
+        self.assertEqual(
+            REFRESH_APP_CATALOG_SKILL.allowed_arguments,
+            (),
+        )
+
+    def test_routes_explicit_app_catalog_refresh_requests(self):
+        refresh_calls: list[None] = []
+
+        def fake_refresh() -> None:
+            refresh_calls.append(None)
+
+        def forbidden_launch(_: str) -> LaunchResult:
+            self.fail(
+                "Refresh commands must not reach the app launcher."
+            )
+
+        commands = (
+            "Refresh apps",
+            "Refresh app list.",
+            "Update app list",
+            "Refresh the application catalog",
+            "Can you please refresh the apps?",
+        )
+
+        for user_input in commands:
+            with self.subTest(user_input=user_input):
+                result = route_local_skill(
+                    user_input,
+                    launch_app=forbidden_launch,
+                    refresh_catalog=fake_refresh,
+                )
+
+                self.assertIsNotNone(result)
+                self.assertTrue(result.handled)
+                self.assertEqual(
+                    result.skill_name,
+                    REFRESH_APP_CATALOG_SKILL.name,
+                )
+                self.assertEqual(
+                    result.message,
+                    "I refreshed the local app list, sir.",
+                )
+
+        self.assertEqual(
+            len(refresh_calls),
+            len(commands),
+        )
+
+    def test_ignores_non_app_refresh_requests(self):
+        refresh_calls: list[None] = []
+
+        def fake_refresh() -> None:
+            refresh_calls.append(None)
+
+        result = route_local_skill(
+            "Refresh weather",
+            refresh_catalog=fake_refresh,
+        )
+
+        self.assertIsNone(result)
+        self.assertEqual(refresh_calls, [])
 
     def test_routes_an_explicit_launch_request(self):
         requested_names: list[str] = []
