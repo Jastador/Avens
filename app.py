@@ -1875,7 +1875,7 @@ def avens_loop():
                 if item_type == "tag":
                     raw_tag = content.strip()
 
-                    # Extract valid full tags only, like <OPEN: discord>
+                    # Extract complete command tags only, such as <CMD: HIDE>.
                     tags = re.findall(r"<[^<>]+>", raw_tag)
                     if not tags:
                         print(f"⚠️ Ignoring malformed tag: {raw_tag}")
