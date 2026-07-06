@@ -1,10 +1,11 @@
 import ctypes
 import os
 import queue
+import re
 import threading
 import time
 from pathlib import Path
-
+from dataclasses import dataclass
 import numpy as np
 import sounddevice as sd
 from faster_whisper import WhisperModel
@@ -13,7 +14,7 @@ from utils.mic_check import get_active_mic
 from utils.microphone_lock import microphone_lock
 from core.performance import performance
 
-STT_PRIMARY_MODEL = "distil-small.en"
+STT_PRIMARY_MODEL = "small.en"
 STT_FALLBACK_MODEL = "tiny.en"
 
 STT_GPU_DEVICE = "cuda"
@@ -22,6 +23,16 @@ STT_GPU_COMPUTE_TYPE = "int8_float16"
 STT_CPU_DEVICE = "cpu"
 STT_CPU_COMPUTE_TYPE = "int8"
 STT_CPU_THREADS = 4
+STT_COMMAND_HOTWORDS = (
+    "Notepad, Calculator, minimize, restore, close, confirm, "
+    "refresh, app list, go to sleep"
+)
+
+STT_COMMAND_INITIAL_PROMPT = (
+    "Voice commands include: Open Notepad. Open Calculator. "
+    "Minimize Notepad. Restore Notepad. Close Notepad. "
+    "Confirm close Notepad. Refresh app list. Go to sleep."
+)
 
 CUDA_RUNTIME_DLLS = (
     "cublasLt64_12.dll",
@@ -179,6 +190,136 @@ def _preload_gpu_runtime_dlls():
 model = None
 audio_queue = queue.Queue()
 
+@dataclass(frozen=True)
+class SttDecodeDecision:
+    """Transcript selected after command-first STT decoding."""
+
+    text: str
+    decode_path: str
+    command_decode_seconds: float
+    generic_decode_seconds: float | None
+
+
+def _normalise_sentence_for_repeat_check(text: str) -> str:
+    """Normalize one sentence only for exact repetition checks."""
+    cleaned = re.sub(r"[^a-z0-9\s]", " ", text.casefold())
+    return " ".join(cleaned.split())
+
+
+def _collapse_exact_repeated_sentences(text: str) -> str:
+    """Collapse only identical repeated sentences from command decoding."""
+    stripped_text = text.strip()
+    sentences = [
+        sentence.strip()
+        for sentence in re.split(r"[.!?]+", stripped_text)
+        if sentence.strip()
+    ]
+
+    if len(sentences) < 2:
+        return stripped_text
+
+    first_normalized = _normalise_sentence_for_repeat_check(
+        sentences[0]
+    )
+
+    if (
+        first_normalized
+        and all(
+            _normalise_sentence_for_repeat_check(sentence)
+            == first_normalized
+            for sentence in sentences
+        )
+    ):
+        return sentences[0]
+
+    return stripped_text
+
+
+def _transcribe_audio(
+    audio_data,
+    *,
+    command_aware: bool,
+) -> str:
+    """Decode already-recorded audio with one selected STT policy."""
+    options = {
+        "language": "en",
+        "beam_size": 5,
+        "vad_filter": True,
+    }
+
+    if command_aware:
+        options.update(
+            {
+                "condition_on_previous_text": False,
+                "hotwords": STT_COMMAND_HOTWORDS,
+                "initial_prompt": STT_COMMAND_INITIAL_PROMPT,
+            }
+        )
+
+    segments, _ = model.transcribe(
+        audio_data,
+        **options,
+    )
+
+    return "".join(
+        segment.text
+        for segment in segments
+    ).strip()
+
+
+def _is_explicit_local_skill_request(text: str) -> bool:
+    """Use the side-effect-free local-skill grammar checker."""
+    from skills.router import is_explicit_local_skill_request
+
+    return is_explicit_local_skill_request(text)
+
+
+def _decode_audio_for_turn(audio_data) -> SttDecodeDecision:
+    """Prefer an explicit command transcript, otherwise use generic STT."""
+    command_started_at = time.perf_counter()
+
+    try:
+        command_text = _collapse_exact_repeated_sentences(
+            _transcribe_audio(
+                audio_data,
+                command_aware=True,
+            )
+        )
+    except Exception as error:
+        print(f"⚠️ Command-aware transcription pass failed: {error}")
+        command_text = ""
+
+    command_decode_seconds = (
+        time.perf_counter() - command_started_at
+    )
+
+    if (
+        command_text
+        and _is_explicit_local_skill_request(command_text)
+    ):
+        return SttDecodeDecision(
+            text=command_text,
+            decode_path="command",
+            command_decode_seconds=command_decode_seconds,
+            generic_decode_seconds=None,
+        )
+
+    generic_started_at = time.perf_counter()
+    generic_text = _transcribe_audio(
+        audio_data,
+        command_aware=False,
+    )
+    generic_decode_seconds = (
+        time.perf_counter() - generic_started_at
+    )
+
+    return SttDecodeDecision(
+        text=generic_text,
+        decode_path="generic",
+        command_decode_seconds=command_decode_seconds,
+        generic_decode_seconds=generic_decode_seconds,
+    )
+
 
 def audio_callback(indata, frames, time_info, status):
     if status:
@@ -251,7 +392,7 @@ def init_model():
         return
     except Exception as cpu_error:
         print(
-            "⚠️ CPU distil-small.en initialization failed: "
+            f"⚠️ CPU {STT_PRIMARY_MODEL} initialization failed: "
             f"{cpu_error}. Trying tiny.en fallback..."
         )
 
@@ -465,16 +606,30 @@ def listen(silence_limit=1.8, max_duration=15):
         )
 
         try:
-            segments, _ = model.transcribe(
-                audio_data,
-                beam_size=5,
-                vad_filter=True,
+            decision = _decode_audio_for_turn(audio_data)
+            text = decision.text
+
+            performance.record_stage(
+                "stt_command_decode_seconds",
+                decision.command_decode_seconds,
+                trace_id,
             )
 
-            text = "".join(
-                segment.text
-                for segment in segments
-            ).strip()
+            if decision.generic_decode_seconds is not None:
+                performance.record_stage(
+                    "stt_generic_decode_seconds",
+                    decision.generic_decode_seconds,
+                    trace_id,
+                )
+
+            performance.add_metadata(
+                {
+                    "stt_decode_path": decision.decode_path,
+                },
+                trace_id,
+            )
+
+            print(f"STT decode path: {decision.decode_path}")
 
         except Exception as error:
             print(f"⚠️ Transcription inference failed: {error}")
