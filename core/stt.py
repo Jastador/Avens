@@ -1,6 +1,9 @@
-import threading
+import ctypes
+import os
 import queue
+import threading
 import time
+from pathlib import Path
 
 import numpy as np
 import sounddevice as sd
@@ -10,6 +13,168 @@ from utils.mic_check import get_active_mic
 from utils.microphone_lock import microphone_lock
 from core.performance import performance
 
+STT_PRIMARY_MODEL = "distil-small.en"
+STT_FALLBACK_MODEL = "tiny.en"
+
+STT_GPU_DEVICE = "cuda"
+STT_GPU_COMPUTE_TYPE = "int8_float16"
+
+STT_CPU_DEVICE = "cpu"
+STT_CPU_COMPUTE_TYPE = "int8"
+STT_CPU_THREADS = 4
+
+CUDA_RUNTIME_DLLS = (
+    "cublasLt64_12.dll",
+    "cublas64_12.dll",
+    "cudnn64_9.dll",
+)
+
+_gpu_runtime_preloaded = False
+_gpu_runtime_dll_directory_handles = []
+_gpu_runtime_dll_handles = []
+
+
+def _append_gpu_runtime_directory(
+    directory,
+    directories,
+    seen_directories,
+):
+    """Add one existing runtime directory once."""
+    directory_path = Path(directory)
+
+    if not directory_path.is_dir():
+        return
+
+    directory_key = str(directory_path).casefold()
+
+    if directory_key in seen_directories:
+        return
+
+    seen_directories.add(directory_key)
+    directories.append(directory_path)
+
+
+def _iter_gpu_runtime_directories():
+    """Return deterministic CUDA and cuDNN runtime search directories."""
+    directories = []
+    seen_directories = set()
+
+    for path_entry in os.environ.get("PATH", "").split(os.pathsep):
+        if path_entry:
+            _append_gpu_runtime_directory(
+                path_entry,
+                directories,
+                seen_directories,
+            )
+
+    for variable_name, variable_value in os.environ.items():
+        variable_name = variable_name.upper()
+
+        if (
+            variable_name == "CUDA_PATH"
+            or variable_name.startswith("CUDA_PATH_V")
+        ) and variable_value:
+            _append_gpu_runtime_directory(
+                Path(variable_value) / "bin",
+                directories,
+                seen_directories,
+            )
+
+    program_files = Path(
+        os.environ.get("ProgramFiles", r"C:\Program Files")
+    )
+
+    cuda_install_root = (
+        program_files
+        / "NVIDIA GPU Computing Toolkit"
+        / "CUDA"
+    )
+
+    for directory in sorted(
+        cuda_install_root.glob("v*/bin"),
+        reverse=True,
+    ):
+        _append_gpu_runtime_directory(
+            directory,
+            directories,
+            seen_directories,
+        )
+
+    cudnn_install_root = program_files / "NVIDIA" / "CUDNN"
+
+    for pattern in (
+        "v*/bin/*/x64",
+        "v*/bin/x64",
+        "v*/bin",
+    ):
+        for directory in sorted(
+            cudnn_install_root.glob(pattern),
+            reverse=True,
+        ):
+            _append_gpu_runtime_directory(
+                directory,
+                directories,
+                seen_directories,
+            )
+
+    return directories
+
+
+def _find_gpu_runtime_dll_path(dll_name):
+    """Find one required CUDA or cuDNN DLL in known local locations."""
+    for directory in _iter_gpu_runtime_directories():
+        dll_path = directory / dll_name
+
+        if dll_path.is_file():
+            return dll_path
+
+    return None
+
+
+def _preload_gpu_runtime_dlls():
+    """Preload CUDA runtime DLLs needed by CTranslate2 on Windows."""
+    global _gpu_runtime_preloaded
+
+    if os.name != "nt" or _gpu_runtime_preloaded:
+        return
+
+    runtime_dll_paths = []
+
+    for dll_name in CUDA_RUNTIME_DLLS:
+        dll_path = _find_gpu_runtime_dll_path(dll_name)
+
+        if dll_path is None:
+            raise RuntimeError(
+                "Required GPU runtime DLL was not found locally: "
+                f"{dll_name}"
+            )
+
+        runtime_dll_paths.append((dll_name, dll_path))
+
+    runtime_directories = []
+    seen_directories = set()
+
+    for _, dll_path in runtime_dll_paths:
+        directory = dll_path.parent
+        directory_key = str(directory).casefold()
+
+        if directory_key not in seen_directories:
+            seen_directories.add(directory_key)
+            runtime_directories.append(directory)
+
+    directory_handles = [
+        os.add_dll_directory(str(directory))
+        for directory in runtime_directories
+    ]
+
+    dll_handles = [
+        ctypes.WinDLL(str(dll_path))
+        for _, dll_path in runtime_dll_paths
+    ]
+
+    _gpu_runtime_dll_directory_handles.extend(directory_handles)
+    _gpu_runtime_dll_handles.extend(dll_handles)
+    _gpu_runtime_preloaded = True
 
 model = None
 audio_queue = queue.Queue()
@@ -21,6 +186,27 @@ def audio_callback(indata, frames, time_info, status):
     audio_queue.put(indata.copy())
 
 
+def _create_whisper_model(
+    model_name,
+    *,
+    device,
+    compute_type,
+):
+    """Create one Whisper model with only device-appropriate options."""
+    options = {
+        "device": device,
+        "compute_type": compute_type,
+    }
+
+    if device == STT_CPU_DEVICE:
+        options["cpu_threads"] = STT_CPU_THREADS
+
+    return WhisperModel(
+        model_name,
+        **options,
+    )
+
+
 def init_model():
     global model
 
@@ -29,27 +215,62 @@ def init_model():
         return
 
     print("🧠 Initializing Faster-Whisper Engine...")
-    try:
-        model = WhisperModel(
-            "distil-small.en",
-            device="cpu",
-            compute_type="int8",
-            cpu_threads=4,
-        )
-        print("✅ Success: Faster-Whisper Engine Online on CPU.")
-    except Exception as error:
-        print(f"⚠️ CPU Primary Initialization failed: {error}. Trying fallback...")
-        try:
-            model = WhisperModel(
-                "tiny.en",
-                device="cpu",
-                compute_type="int8",
-                cpu_threads=4,
-            )
-            print("✅ Success: Faster-Whisper Fallback Engine Online on CPU.")
-        except Exception as fallback_error:
-            print(f"❌ CRITICAL: Faster-Whisper failed entirely. {fallback_error}")
 
+    try:
+        _preload_gpu_runtime_dlls()
+
+        if os.name == "nt":
+            print("✅ CUDA runtime DLLs preloaded for GPU STT.")
+
+        model = _create_whisper_model(
+            STT_PRIMARY_MODEL,
+            device=STT_GPU_DEVICE,
+            compute_type=STT_GPU_COMPUTE_TYPE,
+        )
+        print(
+            "✅ Success: Faster-Whisper Engine Online on GPU "
+            "(CUDA int8_float16)."
+        )
+        return
+    except Exception as gpu_error:
+        print(
+            "⚠️ GPU Faster-Whisper initialization failed: "
+            f"{gpu_error}. Trying CPU fallback..."
+        )
+
+    try:
+        model = _create_whisper_model(
+            STT_PRIMARY_MODEL,
+            device=STT_CPU_DEVICE,
+            compute_type=STT_CPU_COMPUTE_TYPE,
+        )
+        print(
+            "✅ Success: Faster-Whisper Engine Online on CPU "
+            "fallback."
+        )
+        return
+    except Exception as cpu_error:
+        print(
+            "⚠️ CPU distil-small.en initialization failed: "
+            f"{cpu_error}. Trying tiny.en fallback..."
+        )
+
+    try:
+        model = _create_whisper_model(
+            STT_FALLBACK_MODEL,
+            device=STT_CPU_DEVICE,
+            compute_type=STT_CPU_COMPUTE_TYPE,
+        )
+        print(
+            "✅ Success: Faster-Whisper tiny.en fallback Engine "
+            "Online on CPU."
+        )
+    except Exception as fallback_error:
+        model = None
+        print(
+            "❌ CRITICAL: Faster-Whisper failed entirely. "
+            f"{fallback_error}"
+        )
 
 def listen(silence_limit=1.8, max_duration=15):
     global model

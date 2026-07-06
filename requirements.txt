@@ -31,3 +31,6 @@ ddgs
 openai
 google-genai
 cloudinary
+
+# Testing
+pytest
