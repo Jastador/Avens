@@ -191,6 +191,31 @@ CANCEL_NAMED_WINDOW_CLOSE_PATTERN = re.compile(
     re.IGNORECASE,
 )
 
+LOCAL_SKILL_REQUEST_PATTERNS = (
+    APP_LAUNCH_PATTERN,
+    APP_CATALOG_REFRESH_PATTERN,
+    ACTIVE_WINDOW_CONTROL_PATTERN,
+    NAMED_WINDOW_CONTROL_PATTERN,
+    NAMED_WINDOW_CLOSE_PATTERN,
+    CONFIRM_NAMED_WINDOW_CLOSE_PATTERN,
+    CANCEL_NAMED_WINDOW_CLOSE_PATTERN,
+)
+
+
+def is_explicit_local_skill_request(user_input: str) -> bool:
+    """Return whether text has an explicit local-skill grammar match.
+
+    This function is intentionally side-effect free. It must not resolve
+    apps, open windows, create close confirmations, or execute a skill.
+    """
+    if not isinstance(user_input, str):
+        return False
+
+    return any(
+        pattern.match(user_input) is not None
+        for pattern in LOCAL_SKILL_REQUEST_PATTERNS
+    )
+
 def _clean_target(target: str) -> str:
     """Remove trailing politeness without guessing an app name."""
     return re.sub(

@@ -32,8 +32,8 @@ for variable in (
 ):
     os.environ[variable] = "1" if offline_mode else "0"
 
-# Force CPU, avoid CUDA/cuDNN drama.
-os.environ["CUDA_VISIBLE_DEVICES"] = ""
+# Faster-Whisper selects its CTranslate2 device in core/stt.py.
+# Do not hide CUDA globally here.
 
 # Prevent OpenMP thread collisions.
 os.environ["KMP_DUPLICATE_LIB_OK"] = "TRUE"
