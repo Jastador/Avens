@@ -32,6 +32,17 @@ class LocalSkillIntentTests(unittest.TestCase):
             "Delete note 2",
             "Confirm delete note 2",
             "Cancel delete note",
+            "Set volume to 70",
+            "Increase volume",
+            "Decrease volume by 15",
+            "Mute volume",
+            "Unmute volume",
+            "What is the volume?",
+            "Set brightness to 50",
+            "Decrease brightness by 10",
+            "What is brightness?",
+            "Open Night Light settings",
+            "Start reading setup",
         )
 
         for user_input in requests:
@@ -57,6 +68,12 @@ class LocalSkillIntentTests(unittest.TestCase):
             "Delete note",
             "Confirm delete note",
             "Delete note two",
+            "Set volume",
+            "Increase volume by",
+            "Set brightness",
+            "Decrease brightness by",
+            "Night Light settings",
+            "Reading setup",
         )
 
         for user_input in non_commands:

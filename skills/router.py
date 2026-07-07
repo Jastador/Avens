@@ -47,6 +47,24 @@ from skills.note_delete_confirmation import (
     note_delete_confirmation_store,
 )
 
+from skills.system_controls import (
+    BrightnessState,
+    DEFAULT_BRIGHTNESS_STEP,
+    DEFAULT_VOLUME_STEP,
+    ReadingModeResult,
+    SystemControlError,
+    VolumeState,
+    adjust_master_volume,
+    adjust_primary_brightness,
+    get_master_volume,
+    get_primary_brightness,
+    open_night_light_settings,
+    set_master_mute,
+    set_master_volume,
+    set_primary_brightness,
+    start_reading_mode,
+)
+
 from skills.close_confirmation import (
     CloseConfirmationStore,
     close_confirmation_store,
@@ -155,6 +173,43 @@ DELETE_LOCAL_NOTE_SKILL = LocalSkillDefinition(
     allowed_arguments=("note_id",),
     offline=True,
     requires_confirmation=True,
+)
+
+MASTER_VOLUME_SKILL = LocalSkillDefinition(
+    name="control_master_volume",
+    allowed_arguments=(
+        "set_level_percent",
+        "adjust_percent",
+        "mute_state",
+        "read_state",
+    ),
+    offline=True,
+    requires_confirmation=False,
+)
+
+PRIMARY_BRIGHTNESS_SKILL = LocalSkillDefinition(
+    name="control_primary_brightness",
+    allowed_arguments=(
+        "set_level_percent",
+        "adjust_percent",
+        "read_state",
+    ),
+    offline=True,
+    requires_confirmation=False,
+)
+
+OPEN_NIGHT_LIGHT_SETTINGS_SKILL = LocalSkillDefinition(
+    name="open_night_light_settings",
+    allowed_arguments=(),
+    offline=True,
+    requires_confirmation=False,
+)
+
+START_READING_SETUP_SKILL = LocalSkillDefinition(
+    name="start_reading_setup",
+    allowed_arguments=(),
+    offline=True,
+    requires_confirmation=False,
 )
 
 ACTIVE_WINDOW_CONTROL_SKILL = LocalSkillDefinition(
@@ -337,6 +392,151 @@ CANCEL_LOCAL_NOTE_DELETE_PATTERN = re.compile(
     re.IGNORECASE,
 )
 
+MASTER_VOLUME_SET_PATTERN = re.compile(
+    r"^\s*"
+    r"(?:(?:and|or|then)\s+)?"
+    r"(?:(?:can|could|would|will)\s+you\s+)?"
+    r"(?:please\s+)?"
+    r"(?:set|change)\s+"
+    r"(?:the\s+)?"
+    r"(?:master\s+)?"
+    r"volume"
+    r"(?:\s+to)?\s+"
+    r"(?P<level>[0-9]{1,3})"
+    r"\s*(?:%|percent)?"
+    r"(?:\s+please)?"
+    r"\s*[.!?]*\s*$",
+    re.IGNORECASE,
+)
+
+MASTER_VOLUME_ADJUST_PATTERN = re.compile(
+    r"^\s*"
+    r"(?:(?:and|or|then)\s+)?"
+    r"(?:(?:can|could|would|will)\s+you\s+)?"
+    r"(?:please\s+)?"
+    r"(?P<action>increase|raise|decrease|lower)\s+"
+    r"(?:the\s+)?"
+    r"(?:master\s+)?"
+    r"volume"
+    r"(?:\s+by\s+(?P<amount>[0-9]{1,3})"
+    r"\s*(?:%|percent)?)?"
+    r"(?:\s+please)?"
+    r"\s*[.!?]*\s*$",
+    re.IGNORECASE,
+)
+
+MASTER_VOLUME_MUTE_PATTERN = re.compile(
+    r"^\s*"
+    r"(?:(?:and|or|then)\s+)?"
+    r"(?:(?:can|could|would|will)\s+you\s+)?"
+    r"(?:please\s+)?"
+    r"(?:mute|silence)\s+"
+    r"(?:the\s+)?"
+    r"(?:master\s+)?"
+    r"(?:volume|audio|sound)"
+    r"(?:\s+please)?"
+    r"\s*[.!?]*\s*$",
+    re.IGNORECASE,
+)
+
+MASTER_VOLUME_UNMUTE_PATTERN = re.compile(
+    r"^\s*"
+    r"(?:(?:and|or|then)\s+)?"
+    r"(?:(?:can|could|would|will)\s+you\s+)?"
+    r"(?:please\s+)?"
+    r"unmute\s+"
+    r"(?:the\s+)?"
+    r"(?:master\s+)?"
+    r"(?:volume|audio|sound)"
+    r"(?:\s+please)?"
+    r"\s*[.!?]*\s*$",
+    re.IGNORECASE,
+)
+
+MASTER_VOLUME_GET_PATTERN = re.compile(
+    r"^\s*"
+    r"(?:(?:can|could|would|will)\s+you\s+)?"
+    r"(?:please\s+)?"
+    r"(?:what(?:\s+is|'s)|tell\s+me)\s+"
+    r"(?:the\s+)?"
+    r"(?:master\s+)?"
+    r"volume"
+    r"(?:\s+please)?"
+    r"\s*[.!?]*\s*$",
+    re.IGNORECASE,
+)
+
+PRIMARY_BRIGHTNESS_SET_PATTERN = re.compile(
+    r"^\s*"
+    r"(?:(?:and|or|then)\s+)?"
+    r"(?:(?:can|could|would|will)\s+you\s+)?"
+    r"(?:please\s+)?"
+    r"(?:set|change)\s+"
+    r"(?:the\s+)?"
+    r"(?:screen\s+|display\s+)?"
+    r"brightness"
+    r"(?:\s+to)?\s+"
+    r"(?P<level>[0-9]{1,3})"
+    r"\s*(?:%|percent)?"
+    r"(?:\s+please)?"
+    r"\s*[.!?]*\s*$",
+    re.IGNORECASE,
+)
+
+PRIMARY_BRIGHTNESS_ADJUST_PATTERN = re.compile(
+    r"^\s*"
+    r"(?:(?:and|or|then)\s+)?"
+    r"(?:(?:can|could|would|will)\s+you\s+)?"
+    r"(?:please\s+)?"
+    r"(?P<action>increase|raise|decrease|lower)\s+"
+    r"(?:the\s+)?"
+    r"(?:screen\s+|display\s+)?"
+    r"brightness"
+    r"(?:\s+by\s+(?P<amount>[0-9]{1,3})"
+    r"\s*(?:%|percent)?)?"
+    r"(?:\s+please)?"
+    r"\s*[.!?]*\s*$",
+    re.IGNORECASE,
+)
+
+PRIMARY_BRIGHTNESS_GET_PATTERN = re.compile(
+    r"^\s*"
+    r"(?:(?:can|could|would|will)\s+you\s+)?"
+    r"(?:please\s+)?"
+    r"(?:what(?:\s+is|'s)|tell\s+me)\s+"
+    r"(?:the\s+)?"
+    r"(?:screen\s+|display\s+)?"
+    r"brightness"
+    r"(?:\s+please)?"
+    r"\s*[.!?]*\s*$",
+    re.IGNORECASE,
+)
+
+NIGHT_LIGHT_SETTINGS_PATTERN = re.compile(
+    r"^\s*"
+    r"(?:(?:and|or|then)\s+)?"
+    r"(?:(?:can|could|would|will)\s+you\s+)?"
+    r"(?:please\s+)?"
+    r"(?:open|show)\s+"
+    r"(?:the\s+)?"
+    r"night(?:\s|-)?light\s+settings"
+    r"(?:\s+please)?"
+    r"\s*[.!?]*\s*$",
+    re.IGNORECASE,
+)
+
+READING_SETUP_PATTERN = re.compile(
+    r"^\s*"
+    r"(?:(?:and|or|then)\s+)?"
+    r"(?:(?:can|could|would|will)\s+you\s+)?"
+    r"(?:please\s+)?"
+    r"(?:start|open)\s+"
+    r"reading\s+(?:setup|mode)"
+    r"(?:\s+please)?"
+    r"\s*[.!?]*\s*$",
+    re.IGNORECASE,
+)
+
 LOCAL_CONTROLS_GUIDE_PATTERN = re.compile(
     r"^\s*"
     r"(?:(?:and|or|then)\s+)?"
@@ -435,6 +635,16 @@ LOCAL_SKILL_REQUEST_PATTERNS = (
     LOCAL_NOTE_DELETE_PATTERN,
     CONFIRM_LOCAL_NOTE_DELETE_PATTERN,
     CANCEL_LOCAL_NOTE_DELETE_PATTERN,
+    MASTER_VOLUME_SET_PATTERN,
+    MASTER_VOLUME_ADJUST_PATTERN,
+    MASTER_VOLUME_MUTE_PATTERN,
+    MASTER_VOLUME_UNMUTE_PATTERN,
+    MASTER_VOLUME_GET_PATTERN,
+    PRIMARY_BRIGHTNESS_SET_PATTERN,
+    PRIMARY_BRIGHTNESS_ADJUST_PATTERN,
+    PRIMARY_BRIGHTNESS_GET_PATTERN,
+    NIGHT_LIGHT_SETTINGS_PATTERN,
+    READING_SETUP_PATTERN,
     LOCAL_CONTROLS_GUIDE_PATTERN,
     APP_CONTROLS_GUIDE_PATTERN,
     ACTIVE_WINDOW_CONTROL_PATTERN,
@@ -458,6 +668,25 @@ def is_explicit_local_skill_request(user_input: str) -> bool:
         pattern.match(user_input) is not None
         for pattern in LOCAL_SKILL_REQUEST_PATTERNS
     )
+
+def _parse_system_adjustment(
+    raw_amount: str | None,
+    *,
+    default_step: int,
+    label: str,
+) -> int:
+    """Parse one explicit safe percentage adjustment."""
+    if raw_amount is None:
+        return default_step
+
+    amount = int(raw_amount)
+
+    if amount < 1 or amount > 100:
+        raise SystemControlError(
+            f"{label} adjustment must be between 1 and 100."
+        )
+
+    return amount
 
 def _clean_target(target: str) -> str:
     """Remove trailing politeness without guessing an app name."""
@@ -547,8 +776,402 @@ def route_local_skill(
     note_delete_confirmations: NoteDeleteConfirmationStore = (
         note_delete_confirmation_store
     ),
+    get_volume: Callable[[], VolumeState] = get_master_volume,
+    set_volume: Callable[[int], VolumeState] = set_master_volume,
+    adjust_volume: Callable[[int], VolumeState] = (
+        adjust_master_volume
+    ),
+    set_volume_mute: Callable[[bool], VolumeState] = (
+        set_master_mute
+    ),
+    get_brightness: Callable[[], BrightnessState] = (
+        get_primary_brightness
+    ),
+    set_brightness: Callable[[int], BrightnessState] = (
+        set_primary_brightness
+    ),
+    adjust_brightness: Callable[[int], BrightnessState] = (
+        adjust_primary_brightness
+    ),
+    open_night_light: Callable[[], None] = (
+        open_night_light_settings
+    ),
+    start_reading_setup: Callable[[], ReadingModeResult] = (
+        start_reading_mode
+    ),
 ) -> SkillResult | None:
     """Handle explicit local skills before AI or legacy tools."""
+    volume_set_match = MASTER_VOLUME_SET_PATTERN.match(user_input)
+
+    if volume_set_match is not None:
+        level = int(volume_set_match.group("level"))
+
+        try:
+            state = set_volume(level)
+        except SystemControlError as error:
+            console_output(f"System controls error: {error}")
+
+            return SkillResult(
+                handled=True,
+                skill_name=MASTER_VOLUME_SKILL.name,
+                message="I could not set master volume safely, sir.",
+                offline=MASTER_VOLUME_SKILL.offline,
+                requires_confirmation=(
+                    MASTER_VOLUME_SKILL.requires_confirmation
+                ),
+            )
+
+        if state.muted:
+            message = (
+                f"Master volume set to {state.level}%, but audio "
+                "remains muted, sir."
+            )
+        else:
+            message = f"Master volume set to {state.level}%, sir."
+
+        return SkillResult(
+            handled=True,
+            skill_name=MASTER_VOLUME_SKILL.name,
+            message=message,
+            offline=MASTER_VOLUME_SKILL.offline,
+            requires_confirmation=(
+                MASTER_VOLUME_SKILL.requires_confirmation
+            ),
+        )
+
+    volume_adjust_match = MASTER_VOLUME_ADJUST_PATTERN.match(
+        user_input
+    )
+
+    if volume_adjust_match is not None:
+        action = volume_adjust_match.group("action").casefold()
+
+        try:
+            amount = _parse_system_adjustment(
+                volume_adjust_match.group("amount"),
+                default_step=DEFAULT_VOLUME_STEP,
+                label="Volume",
+            )
+            change = amount if action in {"increase", "raise"} else -amount
+            state = adjust_volume(change)
+        except SystemControlError as error:
+            console_output(f"System controls error: {error}")
+
+            return SkillResult(
+                handled=True,
+                skill_name=MASTER_VOLUME_SKILL.name,
+                message="I could not adjust master volume safely, sir.",
+                offline=MASTER_VOLUME_SKILL.offline,
+                requires_confirmation=(
+                    MASTER_VOLUME_SKILL.requires_confirmation
+                ),
+            )
+
+        action_word = (
+            "increased"
+            if change > 0
+            else "decreased"
+        )
+
+        if state.muted:
+            message = (
+                f"Master volume {action_word} to {state.level}%, "
+                "but audio remains muted, sir."
+            )
+        else:
+            message = (
+                f"Master volume {action_word} to {state.level}%, sir."
+            )
+
+        return SkillResult(
+            handled=True,
+            skill_name=MASTER_VOLUME_SKILL.name,
+            message=message,
+            offline=MASTER_VOLUME_SKILL.offline,
+            requires_confirmation=(
+                MASTER_VOLUME_SKILL.requires_confirmation
+            ),
+        )
+
+    volume_mute_match = MASTER_VOLUME_MUTE_PATTERN.match(user_input)
+
+    if volume_mute_match is not None:
+        try:
+            state = set_volume_mute(True)
+        except SystemControlError as error:
+            console_output(f"System controls error: {error}")
+
+            return SkillResult(
+                handled=True,
+                skill_name=MASTER_VOLUME_SKILL.name,
+                message="I could not mute master volume safely, sir.",
+                offline=MASTER_VOLUME_SKILL.offline,
+                requires_confirmation=(
+                    MASTER_VOLUME_SKILL.requires_confirmation
+                ),
+            )
+
+        return SkillResult(
+            handled=True,
+            skill_name=MASTER_VOLUME_SKILL.name,
+            message=(
+                f"Master volume muted at {state.level}%, sir."
+            ),
+            offline=MASTER_VOLUME_SKILL.offline,
+            requires_confirmation=(
+                MASTER_VOLUME_SKILL.requires_confirmation
+            ),
+        )
+
+    volume_unmute_match = MASTER_VOLUME_UNMUTE_PATTERN.match(user_input)
+
+    if volume_unmute_match is not None:
+        try:
+            state = set_volume_mute(False)
+        except SystemControlError as error:
+            console_output(f"System controls error: {error}")
+
+            return SkillResult(
+                handled=True,
+                skill_name=MASTER_VOLUME_SKILL.name,
+                message="I could not unmute master volume safely, sir.",
+                offline=MASTER_VOLUME_SKILL.offline,
+                requires_confirmation=(
+                    MASTER_VOLUME_SKILL.requires_confirmation
+                ),
+            )
+
+        return SkillResult(
+            handled=True,
+            skill_name=MASTER_VOLUME_SKILL.name,
+            message=(
+                f"Master volume unmuted at {state.level}%, sir."
+            ),
+            offline=MASTER_VOLUME_SKILL.offline,
+            requires_confirmation=(
+                MASTER_VOLUME_SKILL.requires_confirmation
+            ),
+        )
+
+    volume_get_match = MASTER_VOLUME_GET_PATTERN.match(user_input)
+
+    if volume_get_match is not None:
+        try:
+            state = get_volume()
+        except SystemControlError as error:
+            console_output(f"System controls error: {error}")
+
+            return SkillResult(
+                handled=True,
+                skill_name=MASTER_VOLUME_SKILL.name,
+                message="I could not read master volume safely, sir.",
+                offline=MASTER_VOLUME_SKILL.offline,
+                requires_confirmation=(
+                    MASTER_VOLUME_SKILL.requires_confirmation
+                ),
+            )
+
+        mute_word = "muted" if state.muted else "unmuted"
+
+        return SkillResult(
+            handled=True,
+            skill_name=MASTER_VOLUME_SKILL.name,
+            message=(
+                f"Master volume is {state.level}%, and audio is "
+                f"{mute_word}, sir."
+            ),
+            offline=MASTER_VOLUME_SKILL.offline,
+            requires_confirmation=(
+                MASTER_VOLUME_SKILL.requires_confirmation
+            ),
+        )
+
+    brightness_set_match = PRIMARY_BRIGHTNESS_SET_PATTERN.match(
+        user_input
+    )
+
+    if brightness_set_match is not None:
+        level = int(brightness_set_match.group("level"))
+
+        try:
+            state = set_brightness(level)
+        except SystemControlError as error:
+            console_output(f"System controls error: {error}")
+
+            return SkillResult(
+                handled=True,
+                skill_name=PRIMARY_BRIGHTNESS_SKILL.name,
+                message=(
+                    "I could not set built-in display brightness "
+                    "safely, sir."
+                ),
+                offline=PRIMARY_BRIGHTNESS_SKILL.offline,
+                requires_confirmation=(
+                    PRIMARY_BRIGHTNESS_SKILL.requires_confirmation
+                ),
+            )
+
+        return SkillResult(
+            handled=True,
+            skill_name=PRIMARY_BRIGHTNESS_SKILL.name,
+            message=(
+                f"Built-in display brightness set to {state.level}%, "
+                "sir."
+            ),
+            offline=PRIMARY_BRIGHTNESS_SKILL.offline,
+            requires_confirmation=(
+                PRIMARY_BRIGHTNESS_SKILL.requires_confirmation
+            ),
+        )
+
+    brightness_adjust_match = PRIMARY_BRIGHTNESS_ADJUST_PATTERN.match(
+        user_input
+    )
+
+    if brightness_adjust_match is not None:
+        action = brightness_adjust_match.group("action").casefold()
+
+        try:
+            amount = _parse_system_adjustment(
+                brightness_adjust_match.group("amount"),
+                default_step=DEFAULT_BRIGHTNESS_STEP,
+                label="Brightness",
+            )
+            change = amount if action in {"increase", "raise"} else -amount
+            state = adjust_brightness(change)
+        except SystemControlError as error:
+            console_output(f"System controls error: {error}")
+
+            return SkillResult(
+                handled=True,
+                skill_name=PRIMARY_BRIGHTNESS_SKILL.name,
+                message=(
+                    "I could not adjust built-in display brightness "
+                    "safely, sir."
+                ),
+                offline=PRIMARY_BRIGHTNESS_SKILL.offline,
+                requires_confirmation=(
+                    PRIMARY_BRIGHTNESS_SKILL.requires_confirmation
+                ),
+            )
+
+        action_word = (
+            "increased"
+            if change > 0
+            else "decreased"
+        )
+
+        return SkillResult(
+            handled=True,
+            skill_name=PRIMARY_BRIGHTNESS_SKILL.name,
+            message=(
+                f"Built-in display brightness {action_word} to "
+                f"{state.level}%, sir."
+            ),
+            offline=PRIMARY_BRIGHTNESS_SKILL.offline,
+            requires_confirmation=(
+                PRIMARY_BRIGHTNESS_SKILL.requires_confirmation
+            ),
+        )
+
+    brightness_get_match = PRIMARY_BRIGHTNESS_GET_PATTERN.match(
+        user_input
+    )
+
+    if brightness_get_match is not None:
+        try:
+            state = get_brightness()
+        except SystemControlError as error:
+            console_output(f"System controls error: {error}")
+
+            return SkillResult(
+                handled=True,
+                skill_name=PRIMARY_BRIGHTNESS_SKILL.name,
+                message=(
+                    "I could not read built-in display brightness "
+                    "safely, sir."
+                ),
+                offline=PRIMARY_BRIGHTNESS_SKILL.offline,
+                requires_confirmation=(
+                    PRIMARY_BRIGHTNESS_SKILL.requires_confirmation
+                ),
+            )
+
+        return SkillResult(
+            handled=True,
+            skill_name=PRIMARY_BRIGHTNESS_SKILL.name,
+            message=(
+                f"Built-in display brightness is {state.level}%, sir."
+            ),
+            offline=PRIMARY_BRIGHTNESS_SKILL.offline,
+            requires_confirmation=(
+                PRIMARY_BRIGHTNESS_SKILL.requires_confirmation
+            ),
+        )
+
+    night_light_match = NIGHT_LIGHT_SETTINGS_PATTERN.match(user_input)
+
+    if night_light_match is not None:
+        try:
+            open_night_light()
+        except SystemControlError as error:
+            console_output(f"System controls error: {error}")
+
+            return SkillResult(
+                handled=True,
+                skill_name=OPEN_NIGHT_LIGHT_SETTINGS_SKILL.name,
+                message=(
+                    "I could not open Night Light Settings safely, sir."
+                ),
+                offline=OPEN_NIGHT_LIGHT_SETTINGS_SKILL.offline,
+                requires_confirmation=(
+                    OPEN_NIGHT_LIGHT_SETTINGS_SKILL
+                    .requires_confirmation
+                ),
+            )
+
+        return SkillResult(
+            handled=True,
+            skill_name=OPEN_NIGHT_LIGHT_SETTINGS_SKILL.name,
+            message="I opened Night Light Settings, sir.",
+            offline=OPEN_NIGHT_LIGHT_SETTINGS_SKILL.offline,
+            requires_confirmation=(
+                OPEN_NIGHT_LIGHT_SETTINGS_SKILL
+                .requires_confirmation
+            ),
+        )
+
+    reading_setup_match = READING_SETUP_PATTERN.match(user_input)
+
+    if reading_setup_match is not None:
+        try:
+            result = start_reading_setup()
+        except SystemControlError as error:
+            console_output(f"System controls error: {error}")
+
+            return SkillResult(
+                handled=True,
+                skill_name=START_READING_SETUP_SKILL.name,
+                message="I could not start reading setup safely, sir.",
+                offline=START_READING_SETUP_SKILL.offline,
+                requires_confirmation=(
+                    START_READING_SETUP_SKILL.requires_confirmation
+                ),
+            )
+
+        return SkillResult(
+            handled=True,
+            skill_name=START_READING_SETUP_SKILL.name,
+            message=(
+                "Reading setup is ready: built-in brightness is "
+                f"{result.brightness.level}%. I opened Night Light "
+                "Settings so you can enable Night Light there, sir."
+            ),
+            offline=START_READING_SETUP_SKILL.offline,
+            requires_confirmation=(
+                START_READING_SETUP_SKILL.requires_confirmation
+            ),
+        )
     confirm_close_match = CONFIRM_NAMED_WINDOW_CLOSE_PATTERN.match(
         user_input
     )

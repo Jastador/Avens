@@ -18,6 +18,10 @@ COMMAND_PHRASES = (
     "close notepad",
     "confirm close notepad",
     "refresh app list",
+    "list apps",
+    "search apps chrome",
+    "what can i control",
+    "what can i do with chrome",
     "take a note buy chicken tomorrow",
     "add note finish Avens tests",
     "show my notes",
@@ -26,11 +30,19 @@ COMMAND_PHRASES = (
     "delete note 2",
     "confirm delete note 2",
     "cancel delete note",
+    "set volume to 70",
+    "increase volume by 10",
+    "decrease volume",
+    "mute volume",
+    "unmute volume",
+    "what is the volume",
+    "set brightness to 50",
+    "increase brightness by 10",
+    "decrease brightness",
+    "what is brightness",
+    "open night light settings",
+    "start reading setup",
     "go to sleep",
-    "list apps",
-    "search apps chrome",
-    "what can i control",
-    "what can i do with chrome",
 )
 
 NON_COMMAND_PHRASES = (
@@ -62,12 +74,12 @@ COMMAND_HOTWORDS = (
     "Notepad, Calculator, minimize, maximize, restore, bring up, "
     "close, confirm, cancel, refresh, app list, list apps, show apps, "
     "search apps, find app, what can I control, what can I do with, "
-    "go to sleep"
-    "Notepad, Calculator, minimize, maximize, restore, bring up, "
-    "close, confirm, cancel, refresh, app list, list apps, show apps, "
-    "search apps, find app, what can I control, what can I do with, "
     "take a note, add note, show my notes, list notes, search notes, "
     "delete note, confirm delete note, cancel delete note, "
+    "set volume, increase volume, decrease volume, mute volume, "
+    "unmute volume, what is the volume, set brightness, "
+    "increase brightness, decrease brightness, what is brightness, "
+    "night light settings, reading setup, "
     "go to sleep"
 )
 
@@ -76,15 +88,15 @@ COMMAND_INITIAL_PROMPT = (
     "Minimize Notepad. Restore Notepad. Close Notepad. "
     "Confirm close Notepad. Refresh app list. List apps. "
     "Search apps Chrome. Find app Visual Studio Code. "
-    "What can I control? What can I do with Chrome? Go to sleep."
-    "Voice commands include: Open Notepad. Open Calculator. "
-    "Minimize Notepad. Restore Notepad. Close Notepad. "
-    "Confirm close Notepad. Refresh app list. List apps. "
-    "Search apps Chrome. Find app Visual Studio Code. "
     "What can I control? What can I do with Chrome? "
     "Take a note buy chicken tomorrow. Add note finish Avens tests. "
-    "Show my notes. List notes. Search notes chicken. Go to sleep."
+    "Show my notes. List notes. Search notes chicken. "
     "Delete note 2. Confirm delete note 2. Cancel delete note. "
+    "Set volume to 70. Increase volume by 10. Mute volume. "
+    "What is the volume? Set brightness to 50. "
+    "Decrease brightness by 10. What is brightness? "
+    "Open Night Light Settings. Start reading setup. "
+    "Go to sleep."
 )
 
 @dataclass(frozen=True)
