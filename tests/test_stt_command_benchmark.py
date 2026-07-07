@@ -20,6 +20,32 @@ from tools.benchmark_stt_commands import (
 
 
 class CommandBenchmarkTests(unittest.TestCase):
+
+    def test_command_benchmark_includes_note_deletion_terms(self):
+        self.assertIn(
+            "delete note 2",
+            PHRASE_SETS["commands"],
+        )
+        self.assertIn(
+            "confirm delete note",
+            COMMAND_HOTWORDS,
+        )
+        self.assertIn(
+            "Confirm delete note 2.",
+            COMMAND_INITIAL_PROMPT,
+        )
+
+    def test_command_benchmark_includes_local_note_terms(self):
+        self.assertIn(
+            "take a note buy chicken tomorrow",
+            PHRASE_SETS["commands"],
+        )
+        self.assertIn("search notes", COMMAND_HOTWORDS)
+        self.assertIn(
+            "Take a note buy chicken tomorrow.",
+            COMMAND_INITIAL_PROMPT,
+        )
+
     def test_command_benchmark_includes_catalog_inspection_terms(self):
         self.assertIn("list apps", PHRASE_SETS["commands"])
         self.assertIn("search apps", COMMAND_HOTWORDS)

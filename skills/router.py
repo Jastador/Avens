@@ -31,6 +31,22 @@ from skills.app_catalog_inspector import (
     search_catalog,
     write_catalog_report,
 )
+from skills.local_notes import (
+    LocalNote,
+    LocalNotesError,
+    format_note_search,
+    format_notes,
+    load_notes,
+    save_note,
+    search_notes,
+    delete_note,
+)
+
+from skills.note_delete_confirmation import (
+    NoteDeleteConfirmationStore,
+    note_delete_confirmation_store,
+)
+
 from skills.close_confirmation import (
     CloseConfirmationStore,
     close_confirmation_store,
@@ -111,6 +127,34 @@ SHOW_APP_CONTROLS_SKILL = LocalSkillDefinition(
     allowed_arguments=("exact_catalog_app_name",),
     offline=True,
     requires_confirmation=False,
+)
+
+CREATE_LOCAL_NOTE_SKILL = LocalSkillDefinition(
+    name="create_local_note",
+    allowed_arguments=("note_text",),
+    offline=True,
+    requires_confirmation=False,
+)
+
+LIST_LOCAL_NOTES_SKILL = LocalSkillDefinition(
+    name="list_local_notes",
+    allowed_arguments=(),
+    offline=True,
+    requires_confirmation=False,
+)
+
+SEARCH_LOCAL_NOTES_SKILL = LocalSkillDefinition(
+    name="search_local_notes",
+    allowed_arguments=("query",),
+    offline=True,
+    requires_confirmation=False,
+)
+
+DELETE_LOCAL_NOTE_SKILL = LocalSkillDefinition(
+    name="delete_local_note",
+    allowed_arguments=("note_id",),
+    offline=True,
+    requires_confirmation=True,
 )
 
 ACTIVE_WINDOW_CONTROL_SKILL = LocalSkillDefinition(
@@ -202,6 +246,92 @@ APP_CATALOG_SEARCH_PATTERN = re.compile(
     r"(?:apps?|applications?)"
     r"(?:\s+for)?\s+"
     r"(?P<query>.+?)"
+    r"(?:\s+please)?"
+    r"\s*[.!?]*\s*$",
+    re.IGNORECASE,
+)
+
+LOCAL_NOTE_CREATE_PATTERN = re.compile(
+    r"^\s*"
+    r"(?:(?:and|or|then)\s+)?"
+    r"(?:(?:can|could|would|will)\s+you\s+)?"
+    r"(?:please\s+)?"
+    r"(?:take|add)\s+"
+    r"(?:a\s+)?"
+    r"note"
+    r"(?:\s+|[,:;.!?]+\s*)"
+    r"(?P<text>.+?)"
+    r"(?:\s+please)?"
+    r"\s*[.!?]*\s*$",
+    re.IGNORECASE,
+)
+
+LOCAL_NOTE_LIST_PATTERN = re.compile(
+    r"^\s*"
+    r"(?:(?:and|or|then)\s+)?"
+    r"(?:(?:can|could|would|will)\s+you\s+)?"
+    r"(?:please\s+)?"
+    r"(?:show|list)\s+"
+    r"(?:my\s+)?"
+    r"notes"
+    r"(?:\s+please)?"
+    r"\s*[.!?]*\s*$",
+    re.IGNORECASE,
+)
+
+LOCAL_NOTE_SEARCH_PATTERN = re.compile(
+    r"^\s*"
+    r"(?:(?:and|or|then)\s+)?"
+    r"(?:(?:can|could|would|will)\s+you\s+)?"
+    r"(?:please\s+)?"
+    r"(?:search|find)\s+"
+    r"(?:my\s+)?"
+    r"notes?"
+    r"\s+"
+    r"(?:for\s+)?"
+    r"(?P<query>.+?)"
+    r"(?:\s+please)?"
+    r"\s*[.!?]*\s*$",
+    re.IGNORECASE,
+)
+
+LOCAL_NOTE_DELETE_PATTERN = re.compile(
+    r"^\s*"
+    r"(?:(?:and|or|then)\s+)?"
+    r"(?:(?:can|could|would|will)\s+you\s+)?"
+    r"(?:please\s+)?"
+    r"delete\s+"
+    r"(?:my\s+)?"
+    r"note\s+"
+    r"(?P<note_id>[0-9]+)"
+    r"(?:\s+please)?"
+    r"\s*[.!?]*\s*$",
+    re.IGNORECASE,
+)
+
+CONFIRM_LOCAL_NOTE_DELETE_PATTERN = re.compile(
+    r"^\s*"
+    r"(?:(?:and|or|then)\s+)?"
+    r"(?:(?:can|could|would|will)\s+you\s+)?"
+    r"(?:please\s+)?"
+    r"confirm(?:\s+|[,:;.!?]+\s*)delete\s+"
+    r"(?:my\s+)?"
+    r"note\s+"
+    r"(?P<note_id>[0-9]+)"
+    r"(?:\s+please)?"
+    r"\s*[.!?]*\s*$",
+    re.IGNORECASE,
+)
+
+CANCEL_LOCAL_NOTE_DELETE_PATTERN = re.compile(
+    r"^\s*"
+    r"(?:(?:and|or|then)\s+)?"
+    r"(?:(?:can|could|would|will)\s+you\s+)?"
+    r"(?:please\s+)?"
+    r"(?:"
+    r"cancel\s+(?:delete\s+)?(?:my\s+)?note"
+    r"|cancel\s+note\s+deletion"
+    r")"
     r"(?:\s+please)?"
     r"\s*[.!?]*\s*$",
     re.IGNORECASE,
@@ -299,6 +429,12 @@ LOCAL_SKILL_REQUEST_PATTERNS = (
     APP_CATALOG_REFRESH_PATTERN,
     APP_CATALOG_LIST_PATTERN,
     APP_CATALOG_SEARCH_PATTERN,
+    LOCAL_NOTE_CREATE_PATTERN,
+    LOCAL_NOTE_LIST_PATTERN,
+    LOCAL_NOTE_SEARCH_PATTERN,
+    LOCAL_NOTE_DELETE_PATTERN,
+    CONFIRM_LOCAL_NOTE_DELETE_PATTERN,
+    CANCEL_LOCAL_NOTE_DELETE_PATTERN,
     LOCAL_CONTROLS_GUIDE_PATTERN,
     APP_CONTROLS_GUIDE_PATTERN,
     ACTIVE_WINDOW_CONTROL_PATTERN,
@@ -400,6 +536,17 @@ def route_local_skill(
     ),
     console_output: Callable[[str], None] = print,
     catalog_report_path: Path = APP_CATALOG_REPORT_PATH,
+    save_local_note: Callable[[str], LocalNote] = save_note,
+    load_local_notes: Callable[[], tuple[LocalNote, ...]] = (
+        load_notes
+    ),
+    find_local_notes: Callable[[str], tuple[LocalNote, ...]] = (
+        search_notes
+    ),
+    delete_local_note: Callable[..., LocalNote] = delete_note,
+    note_delete_confirmations: NoteDeleteConfirmationStore = (
+        note_delete_confirmation_store
+    ),
 ) -> SkillResult | None:
     """Handle explicit local skills before AI or legacy tools."""
     confirm_close_match = CONFIRM_NAMED_WINDOW_CLOSE_PATTERN.match(
@@ -883,6 +1030,315 @@ def route_local_skill(
             offline=SHOW_APP_CONTROLS_SKILL.offline,
             requires_confirmation=(
                 SHOW_APP_CONTROLS_SKILL.requires_confirmation
+            ),
+        )
+
+    confirm_note_delete_match = (
+        CONFIRM_LOCAL_NOTE_DELETE_PATTERN.match(user_input)
+    )
+
+    if confirm_note_delete_match is not None:
+        requested_id = int(
+            confirm_note_delete_match.group("note_id")
+        )
+        decision = note_delete_confirmations.confirm(requested_id)
+
+        if decision.status == "none":
+            return SkillResult(
+                handled=True,
+                skill_name=DELETE_LOCAL_NOTE_SKILL.name,
+                message=(
+                    "There is no pending local note deletion to "
+                    "confirm, sir."
+                ),
+                offline=DELETE_LOCAL_NOTE_SKILL.offline,
+                requires_confirmation=(
+                    DELETE_LOCAL_NOTE_SKILL.requires_confirmation
+                ),
+            )
+
+        if decision.status == "expired":
+            return SkillResult(
+                handled=True,
+                skill_name=DELETE_LOCAL_NOTE_SKILL.name,
+                message=(
+                    "That local note deletion confirmation expired. "
+                    f"Ask me to delete note {decision.request.note_id} "
+                    "again, sir."
+                ),
+                offline=DELETE_LOCAL_NOTE_SKILL.offline,
+                requires_confirmation=(
+                    DELETE_LOCAL_NOTE_SKILL.requires_confirmation
+                ),
+            )
+
+        if decision.status == "mismatch":
+            return SkillResult(
+                handled=True,
+                skill_name=DELETE_LOCAL_NOTE_SKILL.name,
+                message=(
+                    "That confirmation did not match the pending local "
+                    "note deletion, so I cancelled it, sir."
+                ),
+                offline=DELETE_LOCAL_NOTE_SKILL.offline,
+                requires_confirmation=(
+                    DELETE_LOCAL_NOTE_SKILL.requires_confirmation
+                ),
+            )
+
+        pending_request = decision.request
+        expected_note = LocalNote(
+            note_id=pending_request.note_id,
+            text=pending_request.note_text,
+            created_at_utc=pending_request.created_at_utc,
+        )
+
+        try:
+            deleted_note = delete_local_note(
+                pending_request.note_id,
+                expected_note=expected_note,
+            )
+        except LocalNotesError as error:
+            console_output(f"Local notes error: {error}")
+
+            return SkillResult(
+                handled=True,
+                skill_name=DELETE_LOCAL_NOTE_SKILL.name,
+                message=(
+                    "I could not delete that local note safely, sir."
+                ),
+                offline=DELETE_LOCAL_NOTE_SKILL.offline,
+                requires_confirmation=(
+                    DELETE_LOCAL_NOTE_SKILL.requires_confirmation
+                ),
+            )
+
+        console_output(
+            f"Deleted local note {deleted_note.note_id}: "
+            f"{deleted_note.text}"
+        )
+
+        return SkillResult(
+            handled=True,
+            skill_name=DELETE_LOCAL_NOTE_SKILL.name,
+            message=(
+                f"Deleted local note {deleted_note.note_id}, sir."
+            ),
+            offline=DELETE_LOCAL_NOTE_SKILL.offline,
+            requires_confirmation=(
+                DELETE_LOCAL_NOTE_SKILL.requires_confirmation
+            ),
+        )
+
+    cancel_note_delete_match = (
+        CANCEL_LOCAL_NOTE_DELETE_PATTERN.match(user_input)
+    )
+
+    if cancel_note_delete_match is not None:
+        cancelled_request = note_delete_confirmations.cancel()
+
+        if cancelled_request is None:
+            message = (
+                "There is no pending local note deletion to cancel, "
+                "sir."
+            )
+        else:
+            message = (
+                f"Pending deletion of local note "
+                f"{cancelled_request.note_id} cancelled, sir."
+            )
+
+        return SkillResult(
+            handled=True,
+            skill_name=DELETE_LOCAL_NOTE_SKILL.name,
+            message=message,
+            offline=DELETE_LOCAL_NOTE_SKILL.offline,
+            requires_confirmation=(
+                DELETE_LOCAL_NOTE_SKILL.requires_confirmation
+            ),
+        )
+
+    delete_note_match = LOCAL_NOTE_DELETE_PATTERN.match(user_input)
+
+    if delete_note_match is not None:
+        requested_id = int(delete_note_match.group("note_id"))
+
+        try:
+            notes = load_local_notes()
+        except LocalNotesError as error:
+            console_output(f"Local notes error: {error}")
+
+            return SkillResult(
+                handled=True,
+                skill_name=DELETE_LOCAL_NOTE_SKILL.name,
+                message=(
+                    "I could not read local notes safely, sir."
+                ),
+                offline=DELETE_LOCAL_NOTE_SKILL.offline,
+                requires_confirmation=(
+                    DELETE_LOCAL_NOTE_SKILL.requires_confirmation
+                ),
+            )
+
+        target_note = next(
+            (
+                note
+                for note in notes
+                if note.note_id == requested_id
+            ),
+            None,
+        )
+
+        if target_note is None:
+            return SkillResult(
+                handled=True,
+                skill_name=DELETE_LOCAL_NOTE_SKILL.name,
+                message=(
+                    f"I could not find local note {requested_id}, sir."
+                ),
+                offline=DELETE_LOCAL_NOTE_SKILL.offline,
+                requires_confirmation=(
+                    DELETE_LOCAL_NOTE_SKILL.requires_confirmation
+                ),
+            )
+
+        note_delete_confirmations.begin(target_note)
+
+        return SkillResult(
+            handled=True,
+            skill_name=DELETE_LOCAL_NOTE_SKILL.name,
+            message=(
+                f'I found local note {target_note.note_id}: '
+                f'"{target_note.text}". Say '
+                f'"Confirm delete note {target_note.note_id}" to '
+                "permanently delete it, sir."
+            ),
+            offline=DELETE_LOCAL_NOTE_SKILL.offline,
+            requires_confirmation=(
+                DELETE_LOCAL_NOTE_SKILL.requires_confirmation
+            ),
+        )
+
+    create_note_match = LOCAL_NOTE_CREATE_PATTERN.match(user_input)
+
+    if create_note_match is not None:
+        note_text = _clean_target(
+            create_note_match.group("text")
+        )
+
+        try:
+            note = save_local_note(note_text)
+        except LocalNotesError as error:
+            console_output(f"Local notes error: {error}")
+
+            return SkillResult(
+                handled=True,
+                skill_name=CREATE_LOCAL_NOTE_SKILL.name,
+                message=(
+                    "I could not save that local note safely, sir."
+                ),
+                offline=CREATE_LOCAL_NOTE_SKILL.offline,
+                requires_confirmation=(
+                    CREATE_LOCAL_NOTE_SKILL.requires_confirmation
+                ),
+            )
+
+        console_output(
+            f"Saved local note {note.note_id}: {note.text}"
+        )
+
+        return SkillResult(
+            handled=True,
+            skill_name=CREATE_LOCAL_NOTE_SKILL.name,
+            message=f"Saved local note {note.note_id}, sir.",
+            offline=CREATE_LOCAL_NOTE_SKILL.offline,
+            requires_confirmation=(
+                CREATE_LOCAL_NOTE_SKILL.requires_confirmation
+            ),
+        )
+
+    list_notes_match = LOCAL_NOTE_LIST_PATTERN.match(user_input)
+
+    if list_notes_match is not None:
+        try:
+            notes = load_local_notes()
+        except LocalNotesError as error:
+            console_output(f"Local notes error: {error}")
+
+            return SkillResult(
+                handled=True,
+                skill_name=LIST_LOCAL_NOTES_SKILL.name,
+                message=(
+                    "I could not read local notes safely, sir."
+                ),
+                offline=LIST_LOCAL_NOTES_SKILL.offline,
+                requires_confirmation=(
+                    LIST_LOCAL_NOTES_SKILL.requires_confirmation
+                ),
+            )
+
+        console_output(format_notes(notes))
+
+        if not notes:
+            message = "You have no saved local notes, sir."
+        else:
+            message = (
+                f"I printed {len(notes)} local notes, sir."
+            )
+
+        return SkillResult(
+            handled=True,
+            skill_name=LIST_LOCAL_NOTES_SKILL.name,
+            message=message,
+            offline=LIST_LOCAL_NOTES_SKILL.offline,
+            requires_confirmation=(
+                LIST_LOCAL_NOTES_SKILL.requires_confirmation
+            ),
+        )
+
+    search_notes_match = LOCAL_NOTE_SEARCH_PATTERN.match(user_input)
+
+    if search_notes_match is not None:
+        query = _clean_target(
+            search_notes_match.group("query")
+        )
+
+        try:
+            notes = find_local_notes(query)
+        except LocalNotesError as error:
+            console_output(f"Local notes error: {error}")
+
+            return SkillResult(
+                handled=True,
+                skill_name=SEARCH_LOCAL_NOTES_SKILL.name,
+                message=(
+                    "I could not search local notes safely, sir."
+                ),
+                offline=SEARCH_LOCAL_NOTES_SKILL.offline,
+                requires_confirmation=(
+                    SEARCH_LOCAL_NOTES_SKILL.requires_confirmation
+                ),
+            )
+
+        console_output(format_note_search(query, notes))
+
+        if not notes:
+            message = (
+                f"I found no local notes matching {query}, sir."
+            )
+        else:
+            message = (
+                f"I found {len(notes)} local notes matching "
+                f"{query}. I printed the details, sir."
+            )
+
+        return SkillResult(
+            handled=True,
+            skill_name=SEARCH_LOCAL_NOTES_SKILL.name,
+            message=message,
+            offline=SEARCH_LOCAL_NOTES_SKILL.offline,
+            requires_confirmation=(
+                SEARCH_LOCAL_NOTES_SKILL.requires_confirmation
             ),
         )
 
