@@ -42,6 +42,14 @@ COMMAND_PHRASES = (
     "what is brightness",
     "open night light settings",
     "start reading setup",
+    "set a timer for 5 minutes",
+    "start a timer for 45 seconds",
+    "remind me to drink water in 30 minutes",
+    "remind me tomorrow at 8 pm to call dad",
+    "list reminders",
+    "cancel reminder 2",
+    "confirm cancel reminder 2",
+    "cancel reminder cancellation",
     "go to sleep",
 )
 
@@ -80,6 +88,9 @@ COMMAND_HOTWORDS = (
     "unmute volume, what is the volume, set brightness, "
     "increase brightness, decrease brightness, what is brightness, "
     "night light settings, reading setup, "
+    "set a timer, start a timer, timer, remind me, reminders, list reminders, "
+    "cancel reminder, cancel timer, confirm cancel reminder, "
+    "confirm cancel timer, reminder cancellation, "
     "go to sleep"
 )
 
@@ -96,6 +107,12 @@ COMMAND_INITIAL_PROMPT = (
     "What is the volume? Set brightness to 50. "
     "Decrease brightness by 10. What is brightness? "
     "Open Night Light Settings. Start reading setup. "
+    "Set a timer for 5 minutes. Start a timer for 45 seconds. "
+    "Remind me to drink water in 30 minutes. "
+    "Remind me tomorrow at 8 PM to call Dad. "
+    "List reminders. Cancel reminder 2. "
+    "Confirm cancel reminder 2. "
+    "Cancel reminder cancellation. "
     "Go to sleep."
 )
 

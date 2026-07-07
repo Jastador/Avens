@@ -43,6 +43,14 @@ class LocalSkillIntentTests(unittest.TestCase):
             "What is brightness?",
             "Open Night Light settings",
             "Start reading setup",
+            "Set a timer for 5 minutes",
+            "Start a timer for 45 seconds",
+            "Remind me to drink water in 30 minutes",
+            "Remind me tomorrow at 8 PM to call Dad",
+            "List reminders",
+            "Cancel reminder 2",
+            "Confirm cancel reminder 2",
+            "Cancel reminder cancellation",
         )
 
         for user_input in requests:
@@ -74,6 +82,11 @@ class LocalSkillIntentTests(unittest.TestCase):
             "Decrease brightness by",
             "Night Light settings",
             "Reading setup",
+            "Set a timer",
+            "Remind me to drink water",
+            "Remind me tomorrow at 8 PM",
+            "Cancel reminder",
+            "Confirm cancel reminder",
         )
 
         for user_input in non_commands:

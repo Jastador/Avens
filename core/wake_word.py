@@ -1,4 +1,5 @@
 import json
+from collections.abc import Callable
 import time
 from pathlib import Path
 
@@ -28,6 +29,21 @@ MODEL_DIR = Path(BASE_PATH) / "models" / "vosk-model-small-en-us-0.15"
 
 _vosk_model = None
 
+def _should_stop_wait(
+    should_stop: Callable[[], bool] | None,
+) -> bool:
+    """Safely check whether another app task needs the wake loop."""
+    if should_stop is None:
+        return False
+
+    try:
+        return bool(should_stop())
+    except Exception as error:
+        print(
+            "⚠️ Wake listener stop check error: "
+            f"{error}. Continuing safely."
+        )
+        return False
 
 def get_wake_model(
     trace_id: str | None = None,
@@ -75,7 +91,11 @@ def get_wake_model(
         )
 
 
-def listen_for_wake_word(shared_state=None, as_interrupt=False) -> bool:
+def listen_for_wake_word(
+    shared_state=None,
+    as_interrupt=False,
+    should_stop: Callable[[], bool] | None = None,
+) -> bool:
     """
     Wait for “Hey Avens”.
 
@@ -103,6 +123,10 @@ def listen_for_wake_word(shared_state=None, as_interrupt=False) -> bool:
     outcome = "waiting"
 
     try:
+        if _should_stop_wait(should_stop):
+            outcome = "stopped_for_pending_delivery"
+            return False
+
         model = get_wake_model(trace_id)
 
         recognizer_started_at = time.perf_counter()
@@ -190,6 +214,10 @@ def listen_for_wake_word(shared_state=None, as_interrupt=False) -> bool:
                 )
 
                 while True:
+                    if _should_stop_wait(should_stop):
+                        outcome = "stopped_for_pending_delivery"
+                        return False
+
                     if (
                         as_interrupt
                         and shared_state is not None

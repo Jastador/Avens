@@ -136,6 +136,19 @@ class AppCatalogInspectorTests(unittest.TestCase):
         self.assertIn("Search apps <text>", guide)
         self.assertIn("Take a note <text>", guide)
         self.assertIn("Confirm delete note <id>", guide)
+        self.assertIn("Local reminders:", guide)
+        self.assertIn(
+            "Set or start a timer for <duration>",
+            guide,
+        )
+        self.assertIn(
+            "Remind me tomorrow at <time> to <task>",
+            guide,
+        )
+        self.assertIn(
+            "Confirm cancel reminder <id>",
+            guide,
+        )
         self.assertIn("Set volume to <0-100>", guide)
         self.assertIn("Set brightness to <10-100>", guide)
         self.assertIn("Open Night Light settings", guide)

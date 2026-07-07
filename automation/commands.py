@@ -6,7 +6,6 @@ import pygetwindow as gw
 import re
 from core.memory import save_memory
 from core.researcher import research_and_summarize
-from core.butler import set_reminder
 from skills.app_launcher import launch_catalog_app
 
 def execute_command(ai_tag, shared_state):
@@ -69,24 +68,6 @@ def execute_command(ai_tag, shared_state):
             query = f"{query} current stock price today market summary"
         if shared_state: shared_state["state"] = "thinking"
         return research_and_summarize(query)
-
-    # ==========================================
-    # 5. GHOST THREAD REMINDERS
-    # ==========================================
-    elif any(w in tag for w in ["REMIND", "TIMER", "DELAY", "WAIT"]):
-        try:
-            total_seconds = 0
-            hr_match, min_match, sec_match = re.search(r'(\d+)\s*hour', user_prompt), re.search(r'(\d+)\s*minute', user_prompt), re.search(r'(\d+)\s*second', user_prompt)
-            if hr_match: total_seconds += int(hr_match.group(1)) * 3600
-            if min_match: total_seconds += int(min_match.group(1)) * 60
-            if sec_match: total_seconds += int(sec_match.group(1))
-            if total_seconds == 0:
-                first_num = re.search(r'\d+', user_prompt)
-                total_seconds = int(first_num.group()) if first_num else 5
-            set_reminder(total_seconds, "your requested task")
-            return f"Timer set for {total_seconds} seconds."
-        except Exception as e:
-            return "I encountered an error setting that timer, sir."
 
     # ==========================================
     # 6. UTILITIES & MEDIA
