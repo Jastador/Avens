@@ -3,12 +3,16 @@ from __future__ import annotations
 import re
 from collections.abc import Callable
 from dataclasses import dataclass
+from pathlib import Path
+
+from config import LOCAL_DATA_DIR
 
 from skills.app_launcher import (
     LaunchResult,
     clear_catalog_cache,
     launch_catalog_app,
     resolve_catalog_matches,
+    get_catalog_snapshot,
 )
 
 from skills.active_window import (
@@ -17,6 +21,16 @@ from skills.active_window import (
 )
 
 from skills.app_catalog import CatalogApp
+from skills.app_aliases import load_app_aliases
+from skills.app_catalog_inspector import (
+    CatalogReport,
+    build_app_controls_guide,
+    build_catalog_report,
+    build_supported_controls_guide,
+    format_catalog_search_result,
+    search_catalog,
+    write_catalog_report,
+)
 from skills.close_confirmation import (
     CloseConfirmationStore,
     close_confirmation_store,
@@ -28,6 +42,12 @@ from skills.named_window import (
     close_named_app_windows,
     control_named_window,
     inspect_named_app_windows,
+)
+
+APP_CATALOG_REPORT_PATH = (
+    LOCAL_DATA_DIR
+    / "reports"
+    / "app_catalog_report.txt"
 )
 
 @dataclass(frozen=True)
@@ -61,6 +81,34 @@ OPEN_APP_SKILL = LocalSkillDefinition(
 REFRESH_APP_CATALOG_SKILL = LocalSkillDefinition(
     name="refresh_app_catalog",
     allowed_arguments=(),
+    offline=True,
+    requires_confirmation=False,
+)
+
+LIST_APP_CATALOG_SKILL = LocalSkillDefinition(
+    name="list_app_catalog",
+    allowed_arguments=(),
+    offline=True,
+    requires_confirmation=False,
+)
+
+SEARCH_APP_CATALOG_SKILL = LocalSkillDefinition(
+    name="search_app_catalog",
+    allowed_arguments=("query",),
+    offline=True,
+    requires_confirmation=False,
+)
+
+SHOW_LOCAL_CONTROLS_SKILL = LocalSkillDefinition(
+    name="show_local_controls",
+    allowed_arguments=(),
+    offline=True,
+    requires_confirmation=False,
+)
+
+SHOW_APP_CONTROLS_SKILL = LocalSkillDefinition(
+    name="show_app_controls",
+    allowed_arguments=("exact_catalog_app_name",),
     offline=True,
     requires_confirmation=False,
 )
@@ -124,6 +172,61 @@ APP_CATALOG_REFRESH_PATTERN = re.compile(
     r"apps?(?:\s+(?:catalog|list))?"
     r"|applications?(?:\s+(?:catalog|list))?"
     r")"
+    r"(?:\s+please)?"
+    r"\s*[.!?]*\s*$",
+    re.IGNORECASE,
+)
+
+APP_CATALOG_LIST_PATTERN = re.compile(
+    r"^\s*"
+    r"(?:(?:and|or|then)\s+)?"
+    r"(?:(?:can|could|would|will)\s+you\s+)?"
+    r"(?:please\s+)?"
+    r"(?:list|show)\s+"
+    r"(?:(?:all)\s+)?"
+    r"(?:the\s+)?"
+    r"(?:apps?|applications?)"
+    r"(?:\s+(?:catalog|list))?"
+    r"(?:\s+please)?"
+    r"\s*[.!?]*\s*$",
+    re.IGNORECASE,
+)
+
+APP_CATALOG_SEARCH_PATTERN = re.compile(
+    r"^\s*"
+    r"(?:(?:and|or|then)\s+)?"
+    r"(?:(?:can|could|would|will)\s+you\s+)?"
+    r"(?:please\s+)?"
+    r"(?:search|find)\s+"
+    r"(?:the\s+)?"
+    r"(?:apps?|applications?)"
+    r"(?:\s+for)?\s+"
+    r"(?P<query>.+?)"
+    r"(?:\s+please)?"
+    r"\s*[.!?]*\s*$",
+    re.IGNORECASE,
+)
+
+LOCAL_CONTROLS_GUIDE_PATTERN = re.compile(
+    r"^\s*"
+    r"(?:(?:and|or|then)\s+)?"
+    r"(?:(?:can|could|would|will)\s+you\s+)?"
+    r"(?:please\s+)?"
+    r"what\s+can\s+(?:you|i)\s+control"
+    r"(?:\s+please)?"
+    r"\s*[.!?]*\s*$",
+    re.IGNORECASE,
+)
+
+APP_CONTROLS_GUIDE_PATTERN = re.compile(
+    r"^\s*"
+    r"(?:(?:and|or|then)\s+)?"
+    r"(?:(?:can|could|would|will)\s+you\s+)?"
+    r"(?:please\s+)?"
+    r"what\s+can\s+(?:you|i)\s+do\s+with"
+    r"(?:\s+|[,:;.!?]+\s*)"
+    r"(?:the\s+)?"
+    r"(?P<target>.+?)"
     r"(?:\s+please)?"
     r"\s*[.!?]*\s*$",
     re.IGNORECASE,
@@ -194,6 +297,10 @@ CANCEL_NAMED_WINDOW_CLOSE_PATTERN = re.compile(
 LOCAL_SKILL_REQUEST_PATTERNS = (
     APP_LAUNCH_PATTERN,
     APP_CATALOG_REFRESH_PATTERN,
+    APP_CATALOG_LIST_PATTERN,
+    APP_CATALOG_SEARCH_PATTERN,
+    LOCAL_CONTROLS_GUIDE_PATTERN,
+    APP_CONTROLS_GUIDE_PATTERN,
     ACTIVE_WINDOW_CONTROL_PATTERN,
     NAMED_WINDOW_CONTROL_PATTERN,
     NAMED_WINDOW_CLOSE_PATTERN,
@@ -284,6 +391,15 @@ def route_local_skill(
     close_confirmations: CloseConfirmationStore = (
         close_confirmation_store
     ),
+    catalog_snapshot: Callable[[], tuple[CatalogApp, ...]] = (
+        get_catalog_snapshot
+    ),
+    get_aliases: Callable[[], dict[str, str]] = load_app_aliases,
+    write_report: Callable[[CatalogReport, Path], Path] = (
+        write_catalog_report
+    ),
+    console_output: Callable[[str], None] = print,
+    catalog_report_path: Path = APP_CATALOG_REPORT_PATH,
 ) -> SkillResult | None:
     """Handle explicit local skills before AI or legacy tools."""
     confirm_close_match = CONFIRM_NAMED_WINDOW_CLOSE_PATTERN.match(
@@ -619,6 +735,154 @@ def route_local_skill(
             offline=REFRESH_APP_CATALOG_SKILL.offline,
             requires_confirmation=(
                 REFRESH_APP_CATALOG_SKILL.requires_confirmation
+            ),
+        )
+    list_catalog_match = APP_CATALOG_LIST_PATTERN.match(user_input)
+
+    if list_catalog_match is not None:
+        report = build_catalog_report(
+            catalog_snapshot(),
+            get_aliases(),
+        )
+        saved_report_path = write_report(
+            report,
+            catalog_report_path,
+        )
+
+        console_output(report.text)
+        console_output(
+            f"Saved app catalog report: {saved_report_path}"
+        )
+
+        return SkillResult(
+            handled=True,
+            skill_name=LIST_APP_CATALOG_SKILL.name,
+            message=(
+                f"I found {report.entry_count} local catalog entries "
+                f"and {report.alias_count} aliases. I printed the "
+                "full list and saved it in my local reports folder, "
+                "sir."
+            ),
+            offline=LIST_APP_CATALOG_SKILL.offline,
+            requires_confirmation=(
+                LIST_APP_CATALOG_SKILL.requires_confirmation
+            ),
+        )
+
+    search_catalog_match = APP_CATALOG_SEARCH_PATTERN.match(user_input)
+
+    if search_catalog_match is not None:
+        query = _clean_target(
+            search_catalog_match.group("query")
+        )
+        search_result = search_catalog(
+            query,
+            catalog_snapshot(),
+            get_aliases(),
+        )
+
+        console_output(
+            format_catalog_search_result(search_result)
+        )
+
+        match_count = len(search_result.apps)
+        alias_count = len(search_result.aliases)
+
+        if not match_count and not alias_count:
+            message = (
+                f"I found no local catalog or alias matches for "
+                f"{query}, sir."
+            )
+        else:
+            message = (
+                f"I found {match_count} catalog entries and "
+                f"{alias_count} aliases matching {query}. I printed "
+                "the details, sir."
+            )
+
+        return SkillResult(
+            handled=True,
+            skill_name=SEARCH_APP_CATALOG_SKILL.name,
+            message=message,
+            offline=SEARCH_APP_CATALOG_SKILL.offline,
+            requires_confirmation=(
+                SEARCH_APP_CATALOG_SKILL.requires_confirmation
+            ),
+        )
+
+    local_controls_match = LOCAL_CONTROLS_GUIDE_PATTERN.match(
+        user_input
+    )
+
+    if local_controls_match is not None:
+        console_output(build_supported_controls_guide())
+
+        return SkillResult(
+            handled=True,
+            skill_name=SHOW_LOCAL_CONTROLS_SKILL.name,
+            message=(
+                "I printed the full safe local-control guide, sir."
+            ),
+            offline=SHOW_LOCAL_CONTROLS_SKILL.offline,
+            requires_confirmation=(
+                SHOW_LOCAL_CONTROLS_SKILL.requires_confirmation
+            ),
+        )
+
+    app_controls_match = APP_CONTROLS_GUIDE_PATTERN.match(user_input)
+
+    if app_controls_match is not None:
+        requested_name = _clean_target(
+            app_controls_match.group("target")
+        )
+        matches = resolve_app(requested_name)
+
+        if not matches:
+            display_name = requested_name or "that app"
+
+            return SkillResult(
+                handled=True,
+                skill_name=SHOW_APP_CONTROLS_SKILL.name,
+                message=(
+                    f"I could not find an exact local app named "
+                    f"{display_name}, sir. Use Search apps "
+                    f"{display_name} to inspect similar entries."
+                ),
+                offline=SHOW_APP_CONTROLS_SKILL.offline,
+                requires_confirmation=(
+                    SHOW_APP_CONTROLS_SKILL.requires_confirmation
+                ),
+            )
+
+        if len(matches) > 1:
+            return SkillResult(
+                handled=True,
+                skill_name=SHOW_APP_CONTROLS_SKILL.name,
+                message=(
+                    f"I found {len(matches)} exact local apps named "
+                    f"{matches[0].display_name}. I will not guess "
+                    "which one to inspect, sir."
+                ),
+                offline=SHOW_APP_CONTROLS_SKILL.offline,
+                requires_confirmation=(
+                    SHOW_APP_CONTROLS_SKILL.requires_confirmation
+                ),
+            )
+
+        console_output(
+            build_app_controls_guide(matches[0])
+        )
+
+        return SkillResult(
+            handled=True,
+            skill_name=SHOW_APP_CONTROLS_SKILL.name,
+            message=(
+                f"I printed the safe controls for "
+                f"{matches[0].display_name}, sir."
+            ),
+            offline=SHOW_APP_CONTROLS_SKILL.offline,
+            requires_confirmation=(
+                SHOW_APP_CONTROLS_SKILL.requires_confirmation
             ),
         )
 

@@ -12,10 +12,22 @@ from tools.benchmark_stt_commands import (
     is_exact_command_match,
     load_samples,
     normalize_command_text,
+    COMMAND_HOTWORDS,
+    COMMAND_INITIAL_PROMPT,
+    PHRASE_SETS,
 )
 
 
+
 class CommandBenchmarkTests(unittest.TestCase):
+    def test_command_benchmark_includes_catalog_inspection_terms(self):
+        self.assertIn("list apps", PHRASE_SETS["commands"])
+        self.assertIn("search apps", COMMAND_HOTWORDS)
+        self.assertIn(
+            "What can I control?",
+            COMMAND_INITIAL_PROMPT,
+        )
+
     def test_normalize_command_text_ignores_case_and_punctuation(self):
         self.assertEqual(
             normalize_command_text("  Open, Notepad!  "),
