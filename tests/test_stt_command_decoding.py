@@ -59,6 +59,40 @@ class SttCommandDecodingTests(unittest.TestCase):
             ],
         )
 
+    def test_runtime_command_hints_include_system_controls_once(self):
+        self.assertIn(
+            "set volume",
+            stt.STT_COMMAND_HOTWORDS,
+        )
+        self.assertIn(
+            "night light settings",
+            stt.STT_COMMAND_HOTWORDS,
+        )
+        self.assertIn(
+            "Set volume to 70.",
+            stt.STT_COMMAND_INITIAL_PROMPT,
+        )
+        self.assertIn(
+            "Start reading setup.",
+            stt.STT_COMMAND_INITIAL_PROMPT,
+        )
+        self.assertNotIn(
+            "Go to sleep.Delete note",
+            stt.STT_COMMAND_INITIAL_PROMPT,
+        )
+        self.assertEqual(
+            stt.STT_COMMAND_HOTWORDS.count(
+                "Notepad, Calculator"
+            ),
+            1,
+        )
+        self.assertEqual(
+            stt.STT_COMMAND_INITIAL_PROMPT.count(
+                "Voice commands include:"
+            ),
+            1,
+        )
+
     def test_generic_decode_uses_no_command_hints(self):
         fake_model = FakeWhisperModel(["What time is it?"])
         stt.model = fake_model

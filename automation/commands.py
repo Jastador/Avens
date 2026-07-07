@@ -3,55 +3,11 @@ import datetime
 import pyautogui
 import time
 import pygetwindow as gw
-import ctypes
 import re
 from core.memory import save_memory
 from core.researcher import research_and_summarize
 from core.butler import set_reminder
 from skills.app_launcher import launch_catalog_app
-import screen_brightness_control as sbc
-
-# pycaw for precise Windows volume control
-from ctypes import cast, POINTER
-from comtypes import CLSCTX_ALL
-from pycaw.pycaw import AudioUtilities, IAudioEndpointVolume
-
-def force_volume_change(action, steps=5):
-    # Fallback for relative volume control
-    vk_code = 0xAE # Volume Down
-    if action == "up": vk_code = 0xAF
-    elif action == "mute": vk_code = 0xAD
-    for _ in range(steps):
-        ctypes.windll.user32.keybd_event(vk_code, 0, 0, 0)
-        ctypes.windll.user32.keybd_event(vk_code, 0, 2, 0)
-
-def set_exact_volume(level):
-    """Set the Windows master volume and report whether it was precise."""
-    scalar = max(0.0, min(1.0, float(level) / 100.0))
-    com_initialized = False
-
-    try:
-        import pythoncom
-
-        pythoncom.CoInitialize()
-        com_initialized = True
-
-        device = AudioUtilities.GetSpeakers()
-        volume = device.EndpointVolume
-        volume.SetMasterVolumeLevelScalar(scalar, None)
-        return True
-
-    except Exception as error:
-        print(f"⚠️ Precise volume API error: {error}")
-
-        # Approximate fallback only, not a fake “exact” success.
-        force_volume_change("down", 50)
-        force_volume_change("up", round(level / 2))
-        return False
-
-    finally:
-        if com_initialized:
-            pythoncom.CoUninitialize()
 
 def execute_command(ai_tag, shared_state):
     vol_msg = ""
@@ -91,56 +47,6 @@ def execute_command(ai_tag, shared_state):
         time.sleep(1)
         pyautogui.press('enter')
         return f"Joining the {channel_name.title()} voice channel, sir."
-
-    # ==========================================
-    # 2. EXACT SYSTEM CONTROLS (Bulletproof Regex)
-    # ==========================================
-    elif tag == "<CMD: NOX>":
-        try: sbc.set_brightness(0)
-        except: pass
-        return "Nox. The screen is black. Unfortunately, Acer's NitroSense firmware refuses to let me extinguish your keyboard lights, so you'll have to press Fn and F9 yourself like a peasant."
-
-    elif tag == "<CMD: LUMUS>":
-        try: sbc.set_brightness(100)
-        except: pass
-        return "Lumus. Maximum screen illumination, sir."
-
-    elif tag == "<CMD: READING_MODE>":
-        try: sbc.set_brightness(20)
-        except: pass
-        return "Reading mode engaged. Brightness lowered to reduce eye strain, sir."
-
-    elif any(w in tag for w in ["BRIGHT", "SCREEN", "DISPLAY"]):
-        match = re.search(r'\d+', tag)
-        if match:
-            level = min(100, max(0, int(match.group()))) # Caps at 100 so "250" doesn't break it
-            try: sbc.set_brightness(level)
-            except: pass
-            return f"Display brightness set to {level} percent, sir."
-
-    elif any(w in tag for w in ["VOL", "AUDIO", "SOUND", "LEVEL", "MUTE"]):
-        match = re.search(r'\d+', tag)
-        if match:
-            level = min(100, max(0, int(match.group())))
-            precise = set_exact_volume(level)
-
-            if precise:
-                return f"Audio locked to {level} percent, sir."
-
-            return (
-                f"Precise volume control failed, sir. "
-                f"I adjusted it approximately to {level} percent."
-            )
-        # Fallback if no number is given
-        if any(w in user_prompt for w in ["mute", "silence", "off"]):
-            force_volume_change("mute", 1)
-            return "System audio muted, sir."
-        elif any(w in user_prompt for w in ["down", "lower", "quiet", "decrease", "bit"]):
-            force_volume_change("down", 8)
-            return "Turning the volume down, sir."
-        else:
-            force_volume_change("up", 8)
-            return "Turning the volume up, sir."
 
     # ==========================================
     # 2.5 DYNAMIC VECTOR MEMORY HOOKS (Bulletproof Catch-All)
@@ -222,10 +128,6 @@ def execute_command(ai_tag, shared_state):
         query = tag.split(":")[1].replace(">", "").strip().replace(".png", "").replace("_", " ")
         webbrowser.open(f"https://www.google.com/search?tbm=isch&q={query}+4k+wallpaper")
         return "I have opened high-resolution options for your wallpaper, sir."
-        
-    elif tag == "<CMD: SILENCE_NOTIFS>":
-        force_volume_change("mute", 1)
-        return "System silenced, sir. You are alone with your P&L."
 
     elif "TIME" in tag and "TIMER" not in tag:
         return f"It is currently {datetime.datetime.now().strftime('%I:%M %p')}, sir."

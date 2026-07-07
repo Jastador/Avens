@@ -101,6 +101,14 @@ class AppCatalogInspectorRouterTests(unittest.TestCase):
             "Confirm close <app>",
             "\n".join(output),
         )
+        self.assertIn(
+            "Set volume to <0-100>",
+            "\n".join(output),
+        )
+        self.assertIn(
+            "Start reading setup",
+            "\n".join(output),
+        )
 
     def test_app_controls_resolve_an_alias_without_launching(self):
         output = []

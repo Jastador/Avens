@@ -213,9 +213,38 @@ def is_tool_allowed_for_prompt(tag, user_input):
     if tag_l.startswith("<remind:"):
         return any(w in prompt_l for w in ["remind", "timer", "alarm"])
 
-    # Commands allowed only if prompt asks for control/action
+    retired_system_control_prefixes = (
+        "<cmd: set_vol",
+        "<cmd: set_bright",
+        "<cmd: reading_mode",
+        "<cmd: mute",
+        "<cmd: silence_notifs",
+        "<cmd: nox",
+        "<cmd: lumus",
+    )
+
+    if tag_l.startswith(retired_system_control_prefixes):
+        print(
+            f"🚫 Retired legacy system-control tag blocked: {tag}"
+        )
+        return False
+
+    # Remaining legacy commands are allowed only for their matching
+    # non-system-control requests.
     if tag_l.startswith("<cmd:"):
-        return any(w in prompt_l for w in ["volume", "brightness", "mute", "screen", "time", "date", "screenshot", "hide", "show", "vision", "camera"])
+        return any(
+            word in prompt_l
+            for word in (
+                "screen",
+                "time",
+                "date",
+                "screenshot",
+                "hide",
+                "show",
+                "vision",
+                "camera",
+            )
+        )
 
     # Play/search allowed only if user asks
     if tag_l.startswith("<play:") or tag_l.startswith("<search:"):

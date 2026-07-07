@@ -7,24 +7,34 @@ Windows actions. PyQt owns all presentation through the embedded dashboard.
 from __future__ import annotations
 
 from dataclasses import dataclass
+
 import ctypes
 import datetime
 import os
+
 from pathlib import Path
+
 import time
 import urllib.request
+
 from threading import RLock
 from typing import Any, Final
 
 import cv2
 import mediapipe as mp
 import pyautogui
-import screen_brightness_control as sbc
+
 from mediapipe.tasks import python
 from mediapipe.tasks.python import vision
 
-from automation.commands import force_volume_change
 from core.gesture_engine import GestureEngine, GestureSignal
+from skills.system_controls import (
+    BRIGHTNESS_MAXIMUM,
+    BRIGHTNESS_MINIMUM,
+    SystemControlError,
+    adjust_master_volume,
+    set_primary_brightness,
+)
 
 @dataclass(frozen=True)
 class VisionResult:
@@ -395,17 +405,32 @@ class HandVisionProcessor:
         action = signal.action
 
         if action == "VOLUME_DELTA" and signal.value:
-            direction = "up" if signal.value > 0 else "down"
-            steps = min(abs(signal.value), 8)
+            change = max(-8, min(8, signal.value))
 
-            force_volume_change(direction, steps)
+            try:
+                adjust_master_volume(change)
+            except SystemControlError as error:
+                print(f"⚠️ Volume gesture error: {error}")
+                return "VOLUME FAILED"
+
+            direction = "up" if change > 0 else "down"
+            steps = abs(change)
 
             return f"VOLUME {direction.upper()} x{steps}"
 
         if action == "SET_BRIGHTNESS" and signal.value is not None:
-            self._set_brightness(signal.value)
+            requested_level = max(
+                BRIGHTNESS_MINIMUM,
+                min(BRIGHTNESS_MAXIMUM, signal.value),
+            )
 
-            return f"BRIGHTNESS {signal.value}%"
+            try:
+                state = set_primary_brightness(requested_level)
+            except SystemControlError as error:
+                print(f"⚠️ Brightness gesture error: {error}")
+                return "BRIGHTNESS FAILED"
+
+            return f"BRIGHTNESS {state.level}%"
 
         if action == "TOGGLE_PLAY_PAUSE":
             self._toggle_play_pause()
@@ -424,16 +449,6 @@ class HandVisionProcessor:
             return "CONTROLS UNLOCKED"
 
         return None
-
-    @staticmethod
-    def _set_brightness(level: int) -> None:
-        """Set display brightness while preventing invalid values."""
-        try:
-            safe_level = max(0, min(100, int(level)))
-            sbc.set_brightness(safe_level)
-
-        except Exception as error:
-            print(f"⚠️ Brightness gesture error: {error}")
 
     @staticmethod
     def _toggle_play_pause() -> None:

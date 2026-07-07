@@ -134,6 +134,11 @@ class AppCatalogInspectorTests(unittest.TestCase):
         self.assertIn("Open <app>", guide)
         self.assertIn("Confirm close <app>", guide)
         self.assertIn("Search apps <text>", guide)
+        self.assertIn("Take a note <text>", guide)
+        self.assertIn("Confirm delete note <id>", guide)
+        self.assertIn("Set volume to <0-100>", guide)
+        self.assertIn("Set brightness to <10-100>", guide)
+        self.assertIn("Open Night Light settings", guide)
 
     def test_app_controls_guide_uses_the_catalog_display_name(self):
         guide = build_app_controls_guide(self.catalog[0])

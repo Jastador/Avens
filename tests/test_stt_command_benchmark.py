@@ -17,9 +17,33 @@ from tools.benchmark_stt_commands import (
     PHRASE_SETS,
 )
 
-
-
 class CommandBenchmarkTests(unittest.TestCase):
+
+    def test_command_hints_include_system_controls_once(self):
+        self.assertIn(
+            "set volume to 70",
+            PHRASE_SETS["commands"],
+        )
+        self.assertIn(
+            "open night light settings",
+            PHRASE_SETS["commands"],
+        )
+        self.assertIn(
+            "Set volume to 70.",
+            COMMAND_INITIAL_PROMPT,
+        )
+        self.assertNotIn(
+            "Go to sleep.Delete note 2.",
+            COMMAND_INITIAL_PROMPT,
+        )
+        self.assertEqual(
+            COMMAND_INITIAL_PROMPT.count("Voice commands include:"),
+            1,
+        )
+        self.assertEqual(
+            COMMAND_HOTWORDS.count("Notepad, Calculator"),
+            1,
+        )
 
     def test_command_benchmark_includes_note_deletion_terms(self):
         self.assertIn(
