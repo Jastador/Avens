@@ -19,7 +19,7 @@ from tools.benchmark_stt_commands import (
 
 class CommandBenchmarkTests(unittest.TestCase):
 
-    def test_command_hints_include_system_controls_once(self):
+    def test_command_hints_include_system_controls_and_reminders_once(self):
         self.assertIn(
             "set volume to 70",
             PHRASE_SETS["commands"],
@@ -27,6 +27,42 @@ class CommandBenchmarkTests(unittest.TestCase):
         self.assertIn(
             "open night light settings",
             PHRASE_SETS["commands"],
+        )
+        self.assertIn(
+            "set a timer for 5 minutes",
+            PHRASE_SETS["commands"],
+        )
+        self.assertIn(
+            "remind me tomorrow at 8 pm to call dad",
+            PHRASE_SETS["commands"],
+        )
+        self.assertIn(
+            "cancel reminder 2",
+            PHRASE_SETS["commands"],
+        )
+        self.assertIn(
+            "set a timer",
+            COMMAND_HOTWORDS,
+        )
+        self.assertIn(
+            "Set a timer for 5 minutes.",
+            COMMAND_INITIAL_PROMPT,
+        )
+        self.assertIn(
+            "start a timer for 45 seconds",
+            PHRASE_SETS["commands"],
+        )
+        self.assertIn(
+            "start a timer",
+            COMMAND_HOTWORDS,
+        )
+        self.assertIn(
+            "Start a timer for 45 seconds.",
+            COMMAND_INITIAL_PROMPT,
+        )
+        self.assertIn(
+            "Confirm cancel reminder 2.",
+            COMMAND_INITIAL_PROMPT,
         )
         self.assertIn(
             "Set volume to 70.",

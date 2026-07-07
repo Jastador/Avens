@@ -94,7 +94,6 @@ COMMAND RULES:
 
 Available Tags:
 <RESEARCH: Query>
-<REMIND: Seconds | Task>
 <SEARCH: Query>
 <PLAY: Song or Video>
 <CMD: ANALYZE_SCREEN>

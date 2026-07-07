@@ -47,6 +47,31 @@ from skills.note_delete_confirmation import (
     note_delete_confirmation_store,
 )
 
+from skills.local_reminders import (
+    LocalReminder,
+    LocalRemindersError,
+    REMINDER_KIND_REMINDER,
+    REMINDER_KIND_TIMER,
+    REMINDER_STATUS_PENDING,
+    cancel_reminder,
+    format_reminders,
+    load_reminders,
+    save_reminder,
+)
+
+from skills.reminder_cancel_confirmation import (
+    ReminderCancelConfirmationStore,
+    reminder_cancel_confirmation_store,
+)
+
+from skills.reminder_schedule import (
+    ReminderSchedule,
+    ReminderScheduleError,
+    parse_duration_components,
+    schedule_after_duration,
+    schedule_tomorrow_at,
+)
+
 from skills.system_controls import (
     BrightnessState,
     DEFAULT_BRIGHTNESS_STEP,
@@ -171,6 +196,41 @@ SEARCH_LOCAL_NOTES_SKILL = LocalSkillDefinition(
 DELETE_LOCAL_NOTE_SKILL = LocalSkillDefinition(
     name="delete_local_note",
     allowed_arguments=("note_id",),
+    offline=True,
+    requires_confirmation=True,
+)
+
+CREATE_LOCAL_TIMER_SKILL = LocalSkillDefinition(
+    name="create_local_timer",
+    allowed_arguments=(
+        "duration_hours",
+        "duration_minutes",
+        "duration_seconds",
+    ),
+    offline=True,
+    requires_confirmation=False,
+)
+
+CREATE_LOCAL_REMINDER_SKILL = LocalSkillDefinition(
+    name="create_local_reminder",
+    allowed_arguments=(
+        "text",
+        "due_at_utc",
+    ),
+    offline=True,
+    requires_confirmation=False,
+)
+
+LIST_LOCAL_REMINDERS_SKILL = LocalSkillDefinition(
+    name="list_local_reminders",
+    allowed_arguments=(),
+    offline=True,
+    requires_confirmation=False,
+)
+
+CANCEL_LOCAL_REMINDER_SKILL = LocalSkillDefinition(
+    name="cancel_local_reminder",
+    allowed_arguments=("reminder_id",),
     offline=True,
     requires_confirmation=True,
 )
@@ -387,6 +447,111 @@ CANCEL_LOCAL_NOTE_DELETE_PATTERN = re.compile(
     r"cancel\s+(?:delete\s+)?(?:my\s+)?note"
     r"|cancel\s+note\s+deletion"
     r")"
+    r"(?:\s+please)?"
+    r"\s*[.!?]*\s*$",
+    re.IGNORECASE,
+)
+
+LOCAL_TIMER_CREATE_PATTERN = re.compile(
+    r"^\s*"
+    r"(?:(?:and|or|then)\s+)?"
+    r"(?:(?:can|could|would|will)\s+you\s+)?"
+    r"(?:please\s+)?"
+    r"(?:set|start)\s+"
+    r"(?:a\s+)?"
+    r"timer\s+for\s+"
+    r"(?P<duration>.+?)"
+    r"(?:\s+please)?"
+    r"\s*[.!?]*\s*$",
+    re.IGNORECASE,
+)
+
+LOCAL_REMINDER_AFTER_DURATION_PATTERN = re.compile(
+    r"^\s*"
+    r"(?:(?:and|or|then)\s+)?"
+    r"(?:(?:can|could|would|will)\s+you\s+)?"
+    r"(?:please\s+)?"
+    r"remind\s+me\s+to\s+"
+    r"(?P<text>.+)"
+    r"\s+in\s+"
+    r"(?P<duration>.+?)"
+    r"(?:\s+please)?"
+    r"\s*[.!?]*\s*$",
+    re.IGNORECASE,
+)
+
+LOCAL_REMINDER_TOMORROW_PATTERN = re.compile(
+    r"^\s*"
+    r"(?:(?:and|or|then)\s+)?"
+    r"(?:(?:can|could|would|will)\s+you\s+)?"
+    r"(?:please\s+)?"
+    r"remind\s+me\s+tomorrow\s+at\s+"
+    r"(?P<hour>[0-9]{1,2})"
+    r"(?::(?P<minute>[0-9]{2}))?"
+    r"\s*"
+    r"(?P<meridiem>[A-Za-z.]+)"
+    r"\s+to\s+"
+    r"(?P<text>.+?)"
+    r"(?:\s+please)?"
+    r"\s*[.!?]*\s*$",
+    re.IGNORECASE,
+)
+
+LOCAL_REMINDER_LIST_PATTERN = re.compile(
+    r"^\s*"
+    r"(?:(?:and|or|then)\s+)?"
+    r"(?:(?:can|could|would|will)\s+you\s+)?"
+    r"(?:please\s+)?"
+    r"(?:show|list)\s+"
+    r"(?:my\s+)?"
+    r"(?:local\s+)?"
+    r"reminders"
+    r"(?:\s+please)?"
+    r"\s*[.!?]*\s*$",
+    re.IGNORECASE,
+)
+
+LOCAL_REMINDER_CANCEL_PATTERN = re.compile(
+    r"^\s*"
+    r"(?:(?:and|or|then)\s+)?"
+    r"(?:(?:can|could|would|will)\s+you\s+)?"
+    r"(?:please\s+)?"
+    r"cancel\s+"
+    r"(?:my\s+)?"
+    r"(?:local\s+)?"
+    r"(?:timer|reminder)\s+"
+    r"(?P<reminder_id>[0-9]+)"
+    r"(?:\s+please)?"
+    r"\s*[.!?]*\s*$",
+    re.IGNORECASE,
+)
+
+CONFIRM_LOCAL_REMINDER_CANCEL_PATTERN = re.compile(
+    r"^\s*"
+    r"(?:(?:and|or|then)\s+)?"
+    r"(?:(?:can|could|would|will)\s+you\s+)?"
+    r"(?:please\s+)?"
+    r"confirm(?:\s+|[,:;.!?]+\s*)"
+    r"cancel\s+"
+    r"(?:my\s+)?"
+    r"(?:local\s+)?"
+    r"(?:timer|reminder)\s+"
+    r"(?P<reminder_id>[0-9]+)"
+    r"(?:\s+please)?"
+    r"\s*[.!?]*\s*$",
+    re.IGNORECASE,
+)
+
+CANCEL_LOCAL_REMINDER_CANCEL_PATTERN = re.compile(
+    r"^\s*"
+    r"(?:(?:and|or|then)\s+)?"
+    r"(?:(?:can|could|would|will)\s+you\s+)?"
+    r"(?:please\s+)?"
+    r"cancel\s+"
+    r"(?:the\s+)?"
+    r"(?:local\s+)?"
+    r"(?:timer|reminder)\s+"
+    r"cancellation"
     r"(?:\s+please)?"
     r"\s*[.!?]*\s*$",
     re.IGNORECASE,
@@ -625,6 +790,13 @@ CANCEL_NAMED_WINDOW_CLOSE_PATTERN = re.compile(
 )
 
 LOCAL_SKILL_REQUEST_PATTERNS = (
+    LOCAL_TIMER_CREATE_PATTERN,
+    LOCAL_REMINDER_AFTER_DURATION_PATTERN,
+    LOCAL_REMINDER_TOMORROW_PATTERN,
+    LOCAL_REMINDER_LIST_PATTERN,
+    LOCAL_REMINDER_CANCEL_PATTERN,
+    CONFIRM_LOCAL_REMINDER_CANCEL_PATTERN,
+    CANCEL_LOCAL_REMINDER_CANCEL_PATTERN,
     APP_LAUNCH_PATTERN,
     APP_CATALOG_REFRESH_PATTERN,
     APP_CATALOG_LIST_PATTERN,
@@ -776,6 +948,33 @@ def route_local_skill(
     note_delete_confirmations: NoteDeleteConfirmationStore = (
         note_delete_confirmation_store
     ),
+    save_local_reminder: Callable[..., LocalReminder] = (
+        save_reminder
+    ),
+    load_local_reminders: Callable[
+        [],
+        tuple[LocalReminder, ...],
+    ] = load_reminders,
+    cancel_local_reminder: Callable[..., LocalReminder] = (
+        cancel_reminder
+    ),
+    format_local_reminders: Callable[
+        [tuple[LocalReminder, ...]],
+        str,
+    ] = format_reminders,
+    parse_reminder_duration: Callable[
+        [str],
+        tuple[int, int, int],
+    ] = parse_duration_components,
+    schedule_reminder_after: Callable[..., ReminderSchedule] = (
+        schedule_after_duration
+    ),
+    schedule_reminder_tomorrow: Callable[..., ReminderSchedule] = (
+        schedule_tomorrow_at
+    ),
+    reminder_cancel_confirmations: ReminderCancelConfirmationStore = (
+        reminder_cancel_confirmation_store
+    ),
     get_volume: Callable[[], VolumeState] = get_master_volume,
     set_volume: Callable[[int], VolumeState] = set_master_volume,
     adjust_volume: Callable[[int], VolumeState] = (
@@ -801,6 +1000,507 @@ def route_local_skill(
     ),
 ) -> SkillResult | None:
     """Handle explicit local skills before AI or legacy tools."""
+    confirm_reminder_cancel_match = (
+        CONFIRM_LOCAL_REMINDER_CANCEL_PATTERN.match(user_input)
+    )
+
+    if confirm_reminder_cancel_match is not None:
+        requested_id = int(
+            confirm_reminder_cancel_match.group("reminder_id")
+        )
+        decision = reminder_cancel_confirmations.confirm(
+            requested_id
+        )
+
+        if decision.status == "none":
+            return SkillResult(
+                handled=True,
+                skill_name=CANCEL_LOCAL_REMINDER_SKILL.name,
+                message=(
+                    "There is no pending local reminder cancellation "
+                    "to confirm, sir."
+                ),
+                offline=CANCEL_LOCAL_REMINDER_SKILL.offline,
+                requires_confirmation=(
+                    CANCEL_LOCAL_REMINDER_SKILL
+                    .requires_confirmation
+                ),
+            )
+
+        if decision.status == "expired":
+            return SkillResult(
+                handled=True,
+                skill_name=CANCEL_LOCAL_REMINDER_SKILL.name,
+                message=(
+                    "That local reminder cancellation expired. Ask me "
+                    f"to cancel reminder {decision.request.reminder_id} "
+                    "again, sir."
+                ),
+                offline=CANCEL_LOCAL_REMINDER_SKILL.offline,
+                requires_confirmation=(
+                    CANCEL_LOCAL_REMINDER_SKILL
+                    .requires_confirmation
+                ),
+            )
+
+        if decision.status == "mismatch":
+            return SkillResult(
+                handled=True,
+                skill_name=CANCEL_LOCAL_REMINDER_SKILL.name,
+                message=(
+                    "That confirmation did not match the pending local "
+                    "reminder cancellation, so I cancelled it, sir."
+                ),
+                offline=CANCEL_LOCAL_REMINDER_SKILL.offline,
+                requires_confirmation=(
+                    CANCEL_LOCAL_REMINDER_SKILL
+                    .requires_confirmation
+                ),
+            )
+
+        pending_request = decision.request
+        expected_reminder = LocalReminder(
+            reminder_id=pending_request.reminder_id,
+            text=pending_request.reminder_text,
+            kind=pending_request.kind,
+            due_at_utc=pending_request.due_at_utc,
+            created_at_utc=pending_request.created_at_utc,
+            status=pending_request.status,
+        )
+
+        try:
+            cancelled_reminder = cancel_local_reminder(
+                pending_request.reminder_id,
+                expected_reminder=expected_reminder,
+            )
+        except LocalRemindersError as error:
+            console_output(f"Local reminders error: {error}")
+
+            return SkillResult(
+                handled=True,
+                skill_name=CANCEL_LOCAL_REMINDER_SKILL.name,
+                message=(
+                    "I could not cancel that local reminder safely, sir."
+                ),
+                offline=CANCEL_LOCAL_REMINDER_SKILL.offline,
+                requires_confirmation=(
+                    CANCEL_LOCAL_REMINDER_SKILL
+                    .requires_confirmation
+                ),
+            )
+
+        console_output(
+            f"Cancelled local reminder "
+            f"{cancelled_reminder.reminder_id}: "
+            f"{cancelled_reminder.text}"
+        )
+
+        return SkillResult(
+            handled=True,
+            skill_name=CANCEL_LOCAL_REMINDER_SKILL.name,
+            message=(
+                f"Cancelled local reminder "
+                f"{cancelled_reminder.reminder_id}, sir."
+            ),
+            offline=CANCEL_LOCAL_REMINDER_SKILL.offline,
+            requires_confirmation=(
+                CANCEL_LOCAL_REMINDER_SKILL.requires_confirmation
+            ),
+        )
+
+    cancel_reminder_cancellation_match = (
+        CANCEL_LOCAL_REMINDER_CANCEL_PATTERN.match(user_input)
+    )
+
+    if cancel_reminder_cancellation_match is not None:
+        cancelled_request = reminder_cancel_confirmations.cancel()
+
+        if cancelled_request is None:
+            message = (
+                "There is no pending local reminder cancellation to "
+                "cancel, sir."
+            )
+        else:
+            message = (
+                "Pending cancellation of local reminder "
+                f"{cancelled_request.reminder_id} cancelled, sir."
+            )
+
+        return SkillResult(
+            handled=True,
+            skill_name=CANCEL_LOCAL_REMINDER_SKILL.name,
+            message=message,
+            offline=CANCEL_LOCAL_REMINDER_SKILL.offline,
+            requires_confirmation=(
+                CANCEL_LOCAL_REMINDER_SKILL.requires_confirmation
+            ),
+        )
+
+    cancel_reminder_match = LOCAL_REMINDER_CANCEL_PATTERN.match(
+        user_input
+    )
+
+    if cancel_reminder_match is not None:
+        requested_id = int(
+            cancel_reminder_match.group("reminder_id")
+        )
+
+        try:
+            reminders = load_local_reminders()
+        except LocalRemindersError as error:
+            console_output(f"Local reminders error: {error}")
+
+            return SkillResult(
+                handled=True,
+                skill_name=CANCEL_LOCAL_REMINDER_SKILL.name,
+                message=(
+                    "I could not read local reminders safely, sir."
+                ),
+                offline=CANCEL_LOCAL_REMINDER_SKILL.offline,
+                requires_confirmation=(
+                    CANCEL_LOCAL_REMINDER_SKILL
+                    .requires_confirmation
+                ),
+            )
+
+        target_reminder = next(
+            (
+                reminder
+                for reminder in reminders
+                if reminder.reminder_id == requested_id
+            ),
+            None,
+        )
+
+        if target_reminder is None:
+            return SkillResult(
+                handled=True,
+                skill_name=CANCEL_LOCAL_REMINDER_SKILL.name,
+                message=(
+                    f"I could not find local reminder "
+                    f"{requested_id}, sir."
+                ),
+                offline=CANCEL_LOCAL_REMINDER_SKILL.offline,
+                requires_confirmation=(
+                    CANCEL_LOCAL_REMINDER_SKILL
+                    .requires_confirmation
+                ),
+            )
+
+        if target_reminder.status != REMINDER_STATUS_PENDING:
+            return SkillResult(
+                handled=True,
+                skill_name=CANCEL_LOCAL_REMINDER_SKILL.name,
+                message=(
+                    f"Local reminder {requested_id} is not pending and "
+                    "cannot be cancelled, sir."
+                ),
+                offline=CANCEL_LOCAL_REMINDER_SKILL.offline,
+                requires_confirmation=(
+                    CANCEL_LOCAL_REMINDER_SKILL
+                    .requires_confirmation
+                ),
+            )
+
+        reminder_cancel_confirmations.begin(target_reminder)
+
+        return SkillResult(
+            handled=True,
+            skill_name=CANCEL_LOCAL_REMINDER_SKILL.name,
+            message=(
+                f'I found local reminder '
+                f'{target_reminder.reminder_id}: '
+                f'"{target_reminder.text}". Say '
+                f'"Confirm cancel reminder '
+                f'{target_reminder.reminder_id}" to cancel it, sir.'
+            ),
+            offline=CANCEL_LOCAL_REMINDER_SKILL.offline,
+            requires_confirmation=(
+                CANCEL_LOCAL_REMINDER_SKILL.requires_confirmation
+            ),
+        )
+
+    list_reminders_match = LOCAL_REMINDER_LIST_PATTERN.match(
+        user_input
+    )
+
+    if list_reminders_match is not None:
+        try:
+            reminders = load_local_reminders()
+        except LocalRemindersError as error:
+            console_output(f"Local reminders error: {error}")
+
+            return SkillResult(
+                handled=True,
+                skill_name=LIST_LOCAL_REMINDERS_SKILL.name,
+                message=(
+                    "I could not read local reminders safely, sir."
+                ),
+                offline=LIST_LOCAL_REMINDERS_SKILL.offline,
+                requires_confirmation=(
+                    LIST_LOCAL_REMINDERS_SKILL
+                    .requires_confirmation
+                ),
+            )
+
+        console_output(format_local_reminders(reminders))
+
+        if not reminders:
+            message = "You have no saved local reminders, sir."
+        else:
+            message = (
+                f"I printed {len(reminders)} local reminders, sir."
+            )
+
+        return SkillResult(
+            handled=True,
+            skill_name=LIST_LOCAL_REMINDERS_SKILL.name,
+            message=message,
+            offline=LIST_LOCAL_REMINDERS_SKILL.offline,
+            requires_confirmation=(
+                LIST_LOCAL_REMINDERS_SKILL.requires_confirmation
+            ),
+        )
+
+    timer_create_match = LOCAL_TIMER_CREATE_PATTERN.match(user_input)
+
+    if timer_create_match is not None:
+        duration_text = _clean_target(
+            timer_create_match.group("duration")
+        )
+
+        try:
+            hours, minutes, seconds = parse_reminder_duration(
+                duration_text
+            )
+            schedule = schedule_reminder_after(
+                hours=hours,
+                minutes=minutes,
+                seconds=seconds,
+            )
+        except ReminderScheduleError as error:
+            console_output(
+                f"Local reminder schedule error: {error}"
+            )
+
+            return SkillResult(
+                handled=True,
+                skill_name=CREATE_LOCAL_TIMER_SKILL.name,
+                message=(
+                    "I need a numeric timer duration, such as "
+                    "5 minutes, sir."
+                ),
+                offline=CREATE_LOCAL_TIMER_SKILL.offline,
+                requires_confirmation=(
+                    CREATE_LOCAL_TIMER_SKILL.requires_confirmation
+                ),
+            )
+
+        try:
+            reminder = save_local_reminder(
+                "Timer",
+                kind=REMINDER_KIND_TIMER,
+                due_at=schedule.due_at_utc,
+            )
+        except LocalRemindersError as error:
+            console_output(f"Local reminders error: {error}")
+
+            return SkillResult(
+                handled=True,
+                skill_name=CREATE_LOCAL_TIMER_SKILL.name,
+                message=(
+                    "I could not save that local timer safely, sir."
+                ),
+                offline=CREATE_LOCAL_TIMER_SKILL.offline,
+                requires_confirmation=(
+                    CREATE_LOCAL_TIMER_SKILL.requires_confirmation
+                ),
+            )
+
+        console_output(
+            f"Saved local timer {reminder.reminder_id}: "
+            f"{reminder.text} | due {reminder.due_at_utc}"
+        )
+
+        duration_description = schedule.description.removeprefix(
+            "in "
+        )
+
+        return SkillResult(
+            handled=True,
+            skill_name=CREATE_LOCAL_TIMER_SKILL.name,
+            message=(
+                f"Set local timer {reminder.reminder_id} for "
+                f"{duration_description}, sir."
+            ),
+            offline=CREATE_LOCAL_TIMER_SKILL.offline,
+            requires_confirmation=(
+                CREATE_LOCAL_TIMER_SKILL.requires_confirmation
+            ),
+        )
+
+    tomorrow_reminder_match = (
+        LOCAL_REMINDER_TOMORROW_PATTERN.match(user_input)
+    )
+
+    if tomorrow_reminder_match is not None:
+        reminder_text = _clean_target(
+            tomorrow_reminder_match.group("text")
+        )
+        hour = int(tomorrow_reminder_match.group("hour"))
+        minute = int(
+            tomorrow_reminder_match.group("minute") or "0"
+        )
+        meridiem = (
+            tomorrow_reminder_match.group("meridiem")
+            .replace(".", "")
+        )
+
+        try:
+            schedule = schedule_reminder_tomorrow(
+                hour=hour,
+                minute=minute,
+                meridiem=meridiem,
+            )
+        except ReminderScheduleError as error:
+            console_output(
+                f"Local reminder schedule error: {error}"
+            )
+
+            return SkillResult(
+                handled=True,
+                skill_name=CREATE_LOCAL_REMINDER_SKILL.name,
+                message=(
+                    "I need a valid tomorrow time, such as 8 PM, sir."
+                ),
+                offline=CREATE_LOCAL_REMINDER_SKILL.offline,
+                requires_confirmation=(
+                    CREATE_LOCAL_REMINDER_SKILL
+                    .requires_confirmation
+                ),
+            )
+
+        try:
+            reminder = save_local_reminder(
+                reminder_text,
+                kind=REMINDER_KIND_REMINDER,
+                due_at=schedule.due_at_utc,
+            )
+        except LocalRemindersError as error:
+            console_output(f"Local reminders error: {error}")
+
+            return SkillResult(
+                handled=True,
+                skill_name=CREATE_LOCAL_REMINDER_SKILL.name,
+                message=(
+                    "I could not save that local reminder safely, sir."
+                ),
+                offline=CREATE_LOCAL_REMINDER_SKILL.offline,
+                requires_confirmation=(
+                    CREATE_LOCAL_REMINDER_SKILL
+                    .requires_confirmation
+                ),
+            )
+
+        console_output(
+            f"Saved local reminder {reminder.reminder_id}: "
+            f"{reminder.text} | due {reminder.due_at_utc}"
+        )
+
+        return SkillResult(
+            handled=True,
+            skill_name=CREATE_LOCAL_REMINDER_SKILL.name,
+            message=(
+                f"Saved local reminder {reminder.reminder_id}. "
+                f"I will remind you to {reminder.text} "
+                f"{schedule.description}, sir."
+            ),
+            offline=CREATE_LOCAL_REMINDER_SKILL.offline,
+            requires_confirmation=(
+                CREATE_LOCAL_REMINDER_SKILL.requires_confirmation
+            ),
+        )
+
+    duration_reminder_match = (
+        LOCAL_REMINDER_AFTER_DURATION_PATTERN.match(user_input)
+    )
+
+    if duration_reminder_match is not None:
+        reminder_text = _clean_target(
+            duration_reminder_match.group("text")
+        )
+        duration_text = _clean_target(
+            duration_reminder_match.group("duration")
+        )
+
+        try:
+            hours, minutes, seconds = parse_reminder_duration(
+                duration_text
+            )
+            schedule = schedule_reminder_after(
+                hours=hours,
+                minutes=minutes,
+                seconds=seconds,
+            )
+        except ReminderScheduleError as error:
+            console_output(
+                f"Local reminder schedule error: {error}"
+            )
+
+            return SkillResult(
+                handled=True,
+                skill_name=CREATE_LOCAL_REMINDER_SKILL.name,
+                message=(
+                    "I need a numeric reminder duration, such as "
+                    "30 minutes, sir."
+                ),
+                offline=CREATE_LOCAL_REMINDER_SKILL.offline,
+                requires_confirmation=(
+                    CREATE_LOCAL_REMINDER_SKILL
+                    .requires_confirmation
+                ),
+            )
+
+        try:
+            reminder = save_local_reminder(
+                reminder_text,
+                kind=REMINDER_KIND_REMINDER,
+                due_at=schedule.due_at_utc,
+            )
+        except LocalRemindersError as error:
+            console_output(f"Local reminders error: {error}")
+
+            return SkillResult(
+                handled=True,
+                skill_name=CREATE_LOCAL_REMINDER_SKILL.name,
+                message=(
+                    "I could not save that local reminder safely, sir."
+                ),
+                offline=CREATE_LOCAL_REMINDER_SKILL.offline,
+                requires_confirmation=(
+                    CREATE_LOCAL_REMINDER_SKILL
+                    .requires_confirmation
+                ),
+            )
+
+        console_output(
+            f"Saved local reminder {reminder.reminder_id}: "
+            f"{reminder.text} | due {reminder.due_at_utc}"
+        )
+
+        return SkillResult(
+            handled=True,
+            skill_name=CREATE_LOCAL_REMINDER_SKILL.name,
+            message=(
+                f"Saved local reminder {reminder.reminder_id}. "
+                f"I will remind you to {reminder.text} "
+                f"{schedule.description}, sir."
+            ),
+            offline=CREATE_LOCAL_REMINDER_SKILL.offline,
+            requires_confirmation=(
+                CREATE_LOCAL_REMINDER_SKILL.requires_confirmation
+            ),
+        )
     volume_set_match = MASTER_VOLUME_SET_PATTERN.match(user_input)
 
     if volume_set_match is not None:

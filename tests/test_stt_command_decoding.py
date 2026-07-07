@@ -59,7 +59,7 @@ class SttCommandDecodingTests(unittest.TestCase):
             ],
         )
 
-    def test_runtime_command_hints_include_system_controls_once(self):
+    def test_runtime_command_hints_include_system_controls_and_reminders_once(self):
         self.assertIn(
             "set volume",
             stt.STT_COMMAND_HOTWORDS,
@@ -74,6 +74,34 @@ class SttCommandDecodingTests(unittest.TestCase):
         )
         self.assertIn(
             "Start reading setup.",
+            stt.STT_COMMAND_INITIAL_PROMPT,
+        )
+        self.assertIn(
+            "set a timer",
+            stt.STT_COMMAND_HOTWORDS,
+        )
+        self.assertIn(
+            "start a timer",
+            stt.STT_COMMAND_HOTWORDS,
+        )
+        self.assertIn(
+            "Start a timer for 45 seconds.",
+            stt.STT_COMMAND_INITIAL_PROMPT,
+        )
+        self.assertIn(
+            "cancel reminder",
+            stt.STT_COMMAND_HOTWORDS,
+        )
+        self.assertIn(
+            "Set a timer for 5 minutes.",
+            stt.STT_COMMAND_INITIAL_PROMPT,
+        )
+        self.assertIn(
+            "Remind me tomorrow at 8 PM to call Dad.",
+            stt.STT_COMMAND_INITIAL_PROMPT,
+        )
+        self.assertIn(
+            "Confirm cancel reminder 2.",
             stt.STT_COMMAND_INITIAL_PROMPT,
         )
         self.assertNotIn(

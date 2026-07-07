@@ -209,9 +209,15 @@ def is_tool_allowed_for_prompt(tag, user_input):
     if tag_l.startswith(("<memory:", "<remember:", "<save:", "<learn:")):
         return any(w in prompt_l for w in ["remember", "save", "note", "learn"])
 
-    # Reminders only if user asks remind/timer/alarm
-    if tag_l.startswith("<remind:"):
-        return any(w in prompt_l for w in ["remind", "timer", "alarm"])
+    retired_reminder_prefixes = (
+        "<remind:",
+    )
+
+    if tag_l.startswith(retired_reminder_prefixes):
+        print(
+            f"🚫 Retired legacy reminder tag blocked: {tag}"
+        )
+        return False
 
     retired_system_control_prefixes = (
         "<cmd: set_vol",
@@ -880,11 +886,41 @@ def speak_with_barge(text, pause_text=None):
 def avens_loop():
     global conversation_until
 
+    from skills.reminder_delivery import (
+        deliver_due_reminders,
+    )
+    from skills.reminder_scheduler import (
+        reminder_scheduler,
+    )
+
     try:
+        if reminder_scheduler.start():
+            print("⏰ Local reminder scheduler started.")
         speak("Avens is now online.")
         print("Loop running...")
         just_interrupted = False
         while True:
+            due_reminders = reminder_scheduler.drain_deliveries()
+
+            if due_reminders:
+                shared_state["state"] = "speaking"
+
+                deliver_due_reminders(
+                    due_reminders,
+                    announce=lambda message: speak(
+                        message,
+                        shared_state,
+                        performance_label="reminder_alert",
+                    ),
+                )
+
+                # Due reminders are unsolicited. Return to wake-word mode
+                # instead of keeping any old conversation window alive.
+                conversation_until = 0
+
+                shared_state["state"] = "idle"
+                continue
+
             previous_turn_trace_id = performance.current_trace_id()
 
             if previous_turn_trace_id is not None:
@@ -906,11 +942,18 @@ def avens_loop():
             # If no active session exists, require wake word
             if not started_in_active_window:
                 shared_state["state"] = "listening"
-                wake_detected = listen_for_wake_word()
+                wake_detected = listen_for_wake_word(
+                    should_stop=(
+                        reminder_scheduler.has_queued_deliveries
+                    ),
+                )
 
                 # A recoverable microphone error must not make Avens answer as
                 # though a wake phrase was heard. Retry the normal wake loop.
                 if not wake_detected:
+                    if reminder_scheduler.has_queued_deliveries():
+                        continue
+
                     shared_state["state"] = "idle"
                     time.sleep(0.25)
                     continue
@@ -2000,6 +2043,8 @@ def avens_loop():
         print("🔥 THREAD CRASHED:", e)
         import traceback
         traceback.print_exc()
+    finally:
+        reminder_scheduler.stop()
 
 def main():
     boot_trace_id = performance.begin(

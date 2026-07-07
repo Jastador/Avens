@@ -109,6 +109,18 @@ class AppCatalogInspectorRouterTests(unittest.TestCase):
             "Start reading setup",
             "\n".join(output),
         )
+        self.assertIn(
+            "Local reminders:",
+            "\n".join(output),
+        )
+        self.assertIn(
+            "Set or start a timer for <duration>",
+            "\n".join(output),
+        )
+        self.assertIn(
+            "Confirm cancel reminder <id>",
+            "\n".join(output),
+        )
 
     def test_app_controls_resolve_an_alias_without_launching(self):
         output = []
