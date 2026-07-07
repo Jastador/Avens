@@ -24,14 +24,18 @@ STT_CPU_DEVICE = "cpu"
 STT_CPU_COMPUTE_TYPE = "int8"
 STT_CPU_THREADS = 4
 STT_COMMAND_HOTWORDS = (
-    "Notepad, Calculator, minimize, restore, close, confirm, "
-    "refresh, app list, go to sleep"
+    "Notepad, Calculator, minimize, maximize, restore, bring up, "
+    "close, confirm, cancel, refresh, app list, list apps, show apps, "
+    "search apps, find app, what can I control, what can I do with, "
+    "go to sleep"
 )
 
 STT_COMMAND_INITIAL_PROMPT = (
     "Voice commands include: Open Notepad. Open Calculator. "
     "Minimize Notepad. Restore Notepad. Close Notepad. "
-    "Confirm close Notepad. Refresh app list. Go to sleep."
+    "Confirm close Notepad. Refresh app list. List apps. "
+    "Search apps Chrome. Find app Visual Studio Code. "
+    "What can I control? What can I do with Chrome? Go to sleep."
 )
 
 CUDA_RUNTIME_DLLS = (

@@ -17,6 +17,13 @@ class LocalSkillIntentTests(unittest.TestCase):
             "Close Chrome",
             "Confirm, close Chrome",
             "Cancel",
+            "List apps",
+            "List all apps",
+            "Show apps",
+            "Search apps chrome",
+            "Find app visual studio",
+            "What can I control?",
+            "What can I do with Chrome?",
         )
 
         for user_input in requests:
@@ -34,6 +41,8 @@ class LocalSkillIntentTests(unittest.TestCase):
             "Why do people minimize windows?",
             "I do not want you to open anything.",
             "Go to sleep",
+            "Search apps",
+            "What can I do with?",
         )
 
         for user_input in non_commands:

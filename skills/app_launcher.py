@@ -47,6 +47,42 @@ def clear_catalog_cache() -> None:
     _get_regular_catalog.cache_clear()
     _get_packaged_catalog.cache_clear()
 
+def _catalog_snapshot_sort_key(
+    app: CatalogApp,
+) -> tuple[str, str, str, str]:
+    """Keep the public catalog snapshot stable across sessions."""
+    return (
+        app.display_name.casefold(),
+        app.source,
+        str(app.launch_path or ""),
+        app.app_user_model_id or "",
+    )
+
+
+def get_catalog_snapshot() -> tuple[CatalogApp, ...]:
+    """Return one full cached local catalog snapshot for inspection.
+
+    This performs no launching and reuses Avens's existing regular and
+    packaged catalog caches.
+    """
+    regular_catalog = _get_regular_catalog()
+
+    excluded_normalized_names = frozenset(
+        app.normalized_name
+        for app in regular_catalog
+    )
+
+    packaged_catalog = _get_packaged_catalog(
+        excluded_normalized_names,
+    )
+
+    return tuple(
+        sorted(
+            (*regular_catalog, *packaged_catalog),
+            key=_catalog_snapshot_sort_key,
+        )
+    )
+
 def _collapse_matches(
     matches: tuple[CatalogApp, ...],
 ) -> tuple[CatalogApp, ...]:

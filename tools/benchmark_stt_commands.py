@@ -19,6 +19,10 @@ COMMAND_PHRASES = (
     "confirm close notepad",
     "refresh app list",
     "go to sleep",
+    "list apps",
+    "search apps chrome",
+    "what can i control",
+    "what can i do with chrome",
 )
 
 NON_COMMAND_PHRASES = (
@@ -47,14 +51,18 @@ DEFAULT_MODELS = (
 MANIFEST_FILENAME = "manifest.json"
 
 COMMAND_HOTWORDS = (
-    "Notepad, Calculator, minimize, restore, close, confirm, "
-    "refresh, app list, go to sleep"
+    "Notepad, Calculator, minimize, maximize, restore, bring up, "
+    "close, confirm, cancel, refresh, app list, list apps, show apps, "
+    "search apps, find app, what can I control, what can I do with, "
+    "go to sleep"
 )
 
 COMMAND_INITIAL_PROMPT = (
     "Voice commands include: Open Notepad. Open Calculator. "
     "Minimize Notepad. Restore Notepad. Close Notepad. "
-    "Confirm close Notepad. Refresh app list. Go to sleep."
+    "Confirm close Notepad. Refresh app list. List apps. "
+    "Search apps Chrome. Find app Visual Studio Code. "
+    "What can I control? What can I do with Chrome? Go to sleep."
 )
 
 @dataclass(frozen=True)
