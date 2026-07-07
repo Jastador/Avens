@@ -18,6 +18,14 @@ COMMAND_PHRASES = (
     "close notepad",
     "confirm close notepad",
     "refresh app list",
+    "take a note buy chicken tomorrow",
+    "add note finish Avens tests",
+    "show my notes",
+    "list notes",
+    "search notes chicken",
+    "delete note 2",
+    "confirm delete note 2",
+    "cancel delete note",
     "go to sleep",
     "list apps",
     "search apps chrome",
@@ -55,6 +63,12 @@ COMMAND_HOTWORDS = (
     "close, confirm, cancel, refresh, app list, list apps, show apps, "
     "search apps, find app, what can I control, what can I do with, "
     "go to sleep"
+    "Notepad, Calculator, minimize, maximize, restore, bring up, "
+    "close, confirm, cancel, refresh, app list, list apps, show apps, "
+    "search apps, find app, what can I control, what can I do with, "
+    "take a note, add note, show my notes, list notes, search notes, "
+    "delete note, confirm delete note, cancel delete note, "
+    "go to sleep"
 )
 
 COMMAND_INITIAL_PROMPT = (
@@ -63,6 +77,14 @@ COMMAND_INITIAL_PROMPT = (
     "Confirm close Notepad. Refresh app list. List apps. "
     "Search apps Chrome. Find app Visual Studio Code. "
     "What can I control? What can I do with Chrome? Go to sleep."
+    "Voice commands include: Open Notepad. Open Calculator. "
+    "Minimize Notepad. Restore Notepad. Close Notepad. "
+    "Confirm close Notepad. Refresh app list. List apps. "
+    "Search apps Chrome. Find app Visual Studio Code. "
+    "What can I control? What can I do with Chrome? "
+    "Take a note buy chicken tomorrow. Add note finish Avens tests. "
+    "Show my notes. List notes. Search notes chicken. Go to sleep."
+    "Delete note 2. Confirm delete note 2. Cancel delete note. "
 )
 
 @dataclass(frozen=True)

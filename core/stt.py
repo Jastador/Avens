@@ -27,6 +27,8 @@ STT_COMMAND_HOTWORDS = (
     "Notepad, Calculator, minimize, maximize, restore, bring up, "
     "close, confirm, cancel, refresh, app list, list apps, show apps, "
     "search apps, find app, what can I control, what can I do with, "
+    "take a note, add note, show my notes, list notes, search notes, "
+    "delete note, confirm delete note, cancel delete note, "
     "go to sleep"
 )
 
@@ -35,7 +37,10 @@ STT_COMMAND_INITIAL_PROMPT = (
     "Minimize Notepad. Restore Notepad. Close Notepad. "
     "Confirm close Notepad. Refresh app list. List apps. "
     "Search apps Chrome. Find app Visual Studio Code. "
-    "What can I control? What can I do with Chrome? Go to sleep."
+    "What can I control? What can I do with Chrome? "
+    "Take a note buy chicken tomorrow. Add note finish Avens tests. "
+    "Show my notes. List notes. Search notes chicken. Go to sleep."
+    "Delete note 2. Confirm delete note 2. Cancel delete note. "
 )
 
 CUDA_RUNTIME_DLLS = (

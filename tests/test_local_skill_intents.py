@@ -24,6 +24,14 @@ class LocalSkillIntentTests(unittest.TestCase):
             "Find app visual studio",
             "What can I control?",
             "What can I do with Chrome?",
+            "Take a note buy chicken tomorrow",
+            "Add note finish Avens tests",
+            "Show my notes",
+            "List notes",
+            "Search notes chicken",
+            "Delete note 2",
+            "Confirm delete note 2",
+            "Cancel delete note",
         )
 
         for user_input in requests:
@@ -43,6 +51,12 @@ class LocalSkillIntentTests(unittest.TestCase):
             "Go to sleep",
             "Search apps",
             "What can I do with?",
+            "Take a note",
+            "Search notes",
+            "Remember that I like tea",
+            "Delete note",
+            "Confirm delete note",
+            "Delete note two",
         )
 
         for user_input in non_commands:
