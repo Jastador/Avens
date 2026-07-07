@@ -51,6 +51,9 @@ class LocalSkillIntentTests(unittest.TestCase):
             "Cancel reminder 2",
             "Confirm cancel reminder 2",
             "Cancel reminder cancellation",
+            "Find file Avens roadmap",
+            "Search files budget",
+            "What files can you search?",
         )
 
         for user_input in requests:
@@ -87,6 +90,9 @@ class LocalSkillIntentTests(unittest.TestCase):
             "Remind me tomorrow at 8 PM",
             "Cancel reminder",
             "Confirm cancel reminder",
+            "Find file",
+            "Search files",
+            "What files can you",
         )
 
         for user_input in non_commands:

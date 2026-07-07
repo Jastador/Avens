@@ -19,7 +19,7 @@ from tools.benchmark_stt_commands import (
 
 class CommandBenchmarkTests(unittest.TestCase):
 
-    def test_command_hints_include_system_controls_and_reminders_once(self):
+    def test_command_hints_include_local_file_discovery_once(self):
         self.assertIn(
             "set volume to 70",
             PHRASE_SETS["commands"],
@@ -79,6 +79,42 @@ class CommandBenchmarkTests(unittest.TestCase):
         self.assertEqual(
             COMMAND_HOTWORDS.count("Notepad, Calculator"),
             1,
+        )
+        self.assertIn(
+            "find file avens roadmap",
+            PHRASE_SETS["commands"],
+        )
+        self.assertIn(
+            "search files budget",
+            PHRASE_SETS["commands"],
+        )
+        self.assertIn(
+            "what files can you search",
+            PHRASE_SETS["commands"],
+        )
+        self.assertIn(
+            "find file",
+            COMMAND_HOTWORDS,
+        )
+        self.assertIn(
+            "Find file Avens roadmap.",
+            COMMAND_INITIAL_PROMPT,
+        )
+        self.assertIn(
+            "What files can you search?",
+            COMMAND_INITIAL_PROMPT,
+        )
+        self.assertIn(
+            "search files portable ollama",
+            PHRASE_SETS["commands"],
+        )
+        self.assertIn(
+            "Ollama",
+            COMMAND_HOTWORDS,
+        )
+        self.assertIn(
+            "Search files portable Ollama.",
+            COMMAND_INITIAL_PROMPT,
         )
 
     def test_command_benchmark_includes_note_deletion_terms(self):

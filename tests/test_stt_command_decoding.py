@@ -59,7 +59,7 @@ class SttCommandDecodingTests(unittest.TestCase):
             ],
         )
 
-    def test_runtime_command_hints_include_system_controls_and_reminders_once(self):
+    def test_runtime_command_hints_include_local_file_discovery_once(self):
         self.assertIn(
             "set volume",
             stt.STT_COMMAND_HOTWORDS,
@@ -102,6 +102,34 @@ class SttCommandDecodingTests(unittest.TestCase):
         )
         self.assertIn(
             "Confirm cancel reminder 2.",
+            stt.STT_COMMAND_INITIAL_PROMPT,
+        )
+        self.assertIn(
+            "find file",
+            stt.STT_COMMAND_HOTWORDS,
+        )
+        self.assertIn(
+            "search files",
+            stt.STT_COMMAND_HOTWORDS,
+        )
+        self.assertIn(
+            "what files can you search",
+            stt.STT_COMMAND_HOTWORDS,
+        )
+        self.assertIn(
+            "Find file Avens roadmap.",
+            stt.STT_COMMAND_INITIAL_PROMPT,
+        )
+        self.assertIn(
+            "What files can you search?",
+            stt.STT_COMMAND_INITIAL_PROMPT,
+        )
+        self.assertIn(
+            "Ollama",
+            stt.STT_COMMAND_HOTWORDS,
+        )
+        self.assertIn(
+            "Search files portable Ollama.",
             stt.STT_COMMAND_INITIAL_PROMPT,
         )
         self.assertNotIn(

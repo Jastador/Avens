@@ -152,6 +152,12 @@ class AppCatalogInspectorTests(unittest.TestCase):
         self.assertIn("Set volume to <0-100>", guide)
         self.assertIn("Set brightness to <10-100>", guide)
         self.assertIn("Open Night Light settings", guide)
+        self.assertIn("Local file discovery:", guide)
+        self.assertIn("Find file <terms>", guide)
+        self.assertIn(
+            "What files can you search?",
+            guide,
+        )
 
     def test_app_controls_guide_uses_the_catalog_display_name(self):
         guide = build_app_controls_guide(self.catalog[0])
