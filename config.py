@@ -45,6 +45,40 @@ LOCAL_DATA_DIR = Path(
     os.getenv("AVENS_DATA_DIR", str(_default_data_root))
 ).expanduser()
 
+def _parse_file_search_roots(
+    raw_value: str | None,
+) -> tuple[Path, ...]:
+    """Parse configured safe roots without probing the disk."""
+    if raw_value is None:
+        return ()
+
+    roots: list[Path] = []
+    seen_roots: set[str] = set()
+
+    for raw_root in raw_value.split(os.pathsep):
+        value = raw_root.strip()
+
+        if not value:
+            continue
+
+        root = Path(value).expanduser()
+        identity = os.path.normcase(
+            os.path.normpath(str(root))
+        )
+
+        if identity in seen_roots:
+            continue
+
+        seen_roots.add(identity)
+        roots.append(root)
+
+    return tuple(roots)
+
+
+FILE_SEARCH_ROOTS = _parse_file_search_roots(
+    os.getenv("AVENS_FILE_SEARCH_ROOTS")
+)
+
 # Public default. Personal fine-tuned models can override this in .env.
 OLLAMA_MODEL = os.getenv("AVENS_OLLAMA_MODEL", "phi3:instruct")
 

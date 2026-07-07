@@ -121,6 +121,18 @@ class AppCatalogInspectorRouterTests(unittest.TestCase):
             "Confirm cancel reminder <id>",
             "\n".join(output),
         )
+        self.assertIn(
+            "Local file discovery:",
+            "\n".join(output),
+        )
+        self.assertIn(
+            "Find file <terms>",
+            "\n".join(output),
+        )
+        self.assertIn(
+            "What files can you search?",
+            "\n".join(output),
+        )
 
     def test_app_controls_resolve_an_alias_without_launching(self):
         output = []

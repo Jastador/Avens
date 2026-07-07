@@ -31,6 +31,15 @@ from skills.app_catalog_inspector import (
     search_catalog,
     write_catalog_report,
 )
+
+from skills.local_file_discovery import (
+    LocalFileDiscoveryError,
+    LocalFileSearchReport,
+    format_local_file_search,
+    format_local_file_search_scope,
+    search_local_files,
+)
+
 from skills.local_notes import (
     LocalNote,
     LocalNotesError,
@@ -154,6 +163,20 @@ LIST_APP_CATALOG_SKILL = LocalSkillDefinition(
 SEARCH_APP_CATALOG_SKILL = LocalSkillDefinition(
     name="search_app_catalog",
     allowed_arguments=("query",),
+    offline=True,
+    requires_confirmation=False,
+)
+
+SEARCH_LOCAL_FILES_SKILL = LocalSkillDefinition(
+    name="search_local_files",
+    allowed_arguments=("filename_query",),
+    offline=True,
+    requires_confirmation=False,
+)
+
+SHOW_LOCAL_FILE_SEARCH_SCOPE_SKILL = LocalSkillDefinition(
+    name="show_local_file_search_scope",
+    allowed_arguments=(),
     offline=True,
     requires_confirmation=False,
 )
@@ -361,6 +384,32 @@ APP_CATALOG_SEARCH_PATTERN = re.compile(
     r"(?:apps?|applications?)"
     r"(?:\s+for)?\s+"
     r"(?P<query>.+?)"
+    r"(?:\s+please)?"
+    r"\s*[.!?]*\s*$",
+    re.IGNORECASE,
+)
+
+LOCAL_FILE_SEARCH_PATTERN = re.compile(
+    r"^\s*"
+    r"(?:(?:and|or|then)\s+)?"
+    r"(?:(?:can|could|would|will)\s+you\s+)?"
+    r"(?:please\s+)?"
+    r"(?:find|search)\s+"
+    r"(?:my\s+)?"
+    r"files?"
+    r"(?:\s+for)?\s+"
+    r"(?P<query>.+?)"
+    r"(?:\s+please)?"
+    r"\s*[.!?]*\s*$",
+    re.IGNORECASE,
+)
+
+LOCAL_FILE_SEARCH_SCOPE_PATTERN = re.compile(
+    r"^\s*"
+    r"(?:(?:and|or|then)\s+)?"
+    r"(?:(?:can|could|would|will)\s+you\s+)?"
+    r"(?:please\s+)?"
+    r"what\s+files?\s+can\s+(?:you|i)\s+search"
     r"(?:\s+please)?"
     r"\s*[.!?]*\s*$",
     re.IGNORECASE,
@@ -801,6 +850,8 @@ LOCAL_SKILL_REQUEST_PATTERNS = (
     APP_CATALOG_REFRESH_PATTERN,
     APP_CATALOG_LIST_PATTERN,
     APP_CATALOG_SEARCH_PATTERN,
+    LOCAL_FILE_SEARCH_PATTERN,
+    LOCAL_FILE_SEARCH_SCOPE_PATTERN,
     LOCAL_NOTE_CREATE_PATTERN,
     LOCAL_NOTE_LIST_PATTERN,
     LOCAL_NOTE_SEARCH_PATTERN,
@@ -937,6 +988,18 @@ def route_local_skill(
     ),
     console_output: Callable[[str], None] = print,
     catalog_report_path: Path = APP_CATALOG_REPORT_PATH,
+    find_local_files: Callable[
+        [str],
+        LocalFileSearchReport,
+    ] = search_local_files,
+    format_local_file_search_report: Callable[
+        [LocalFileSearchReport],
+        str,
+    ] = format_local_file_search,
+    describe_local_file_search_scope: Callable[
+        [],
+        str,
+    ] = format_local_file_search_scope,
     save_local_note: Callable[[str], LocalNote] = save_note,
     load_local_notes: Callable[[], tuple[LocalNote, ...]] = (
         load_notes
@@ -1000,6 +1063,112 @@ def route_local_skill(
     ),
 ) -> SkillResult | None:
     """Handle explicit local skills before AI or legacy tools."""
+    file_search_scope_match = (
+        LOCAL_FILE_SEARCH_SCOPE_PATTERN.match(user_input)
+    )
+
+    if file_search_scope_match is not None:
+        try:
+            scope_text = describe_local_file_search_scope()
+        except LocalFileDiscoveryError as error:
+            console_output(
+                f"Local file discovery error: {error}"
+            )
+
+            return SkillResult(
+                handled=True,
+                skill_name=(
+                    SHOW_LOCAL_FILE_SEARCH_SCOPE_SKILL.name
+                ),
+                message=(
+                    "I could not read the approved local "
+                    "file-search scope safely, sir."
+                ),
+                offline=(
+                    SHOW_LOCAL_FILE_SEARCH_SCOPE_SKILL.offline
+                ),
+                requires_confirmation=(
+                    SHOW_LOCAL_FILE_SEARCH_SCOPE_SKILL
+                    .requires_confirmation
+                ),
+            )
+
+        console_output(scope_text)
+
+        return SkillResult(
+            handled=True,
+            skill_name=SHOW_LOCAL_FILE_SEARCH_SCOPE_SKILL.name,
+            message=(
+                "I printed the approved local file-search scope, sir."
+            ),
+            offline=SHOW_LOCAL_FILE_SEARCH_SCOPE_SKILL.offline,
+            requires_confirmation=(
+                SHOW_LOCAL_FILE_SEARCH_SCOPE_SKILL
+                .requires_confirmation
+            ),
+        )
+
+    file_search_match = LOCAL_FILE_SEARCH_PATTERN.match(user_input)
+
+    if file_search_match is not None:
+        query = _clean_target(
+            file_search_match.group("query")
+        )
+
+        try:
+            report = find_local_files(query)
+            formatted_report = format_local_file_search_report(
+                report
+            )
+        except LocalFileDiscoveryError as error:
+            console_output(
+                f"Local file discovery error: {error}"
+            )
+
+            return SkillResult(
+                handled=True,
+                skill_name=SEARCH_LOCAL_FILES_SKILL.name,
+                message=(
+                    "I could not safely search the configured local "
+                    "folders, sir."
+                ),
+                offline=SEARCH_LOCAL_FILES_SKILL.offline,
+                requires_confirmation=(
+                    SEARCH_LOCAL_FILES_SKILL
+                    .requires_confirmation
+                ),
+            )
+
+        console_output(formatted_report)
+        match_count = len(report.matches)
+
+        if match_count == 0:
+            message = (
+                f'I found no approved local files matching '
+                f'"{report.query}", sir.'
+            )
+        elif report.result_limit_reached:
+            message = (
+                f"I printed the first {match_count} approved local "
+                "file matches, sir."
+            )
+        elif match_count == 1:
+            message = "I printed 1 approved local file match, sir."
+        else:
+            message = (
+                f"I printed {match_count} approved local file "
+                "matches, sir."
+            )
+
+        return SkillResult(
+            handled=True,
+            skill_name=SEARCH_LOCAL_FILES_SKILL.name,
+            message=message,
+            offline=SEARCH_LOCAL_FILES_SKILL.offline,
+            requires_confirmation=(
+                SEARCH_LOCAL_FILES_SKILL.requires_confirmation
+            ),
+        )
     confirm_reminder_cancel_match = (
         CONFIRM_LOCAL_REMINDER_CANCEL_PATTERN.match(user_input)
     )
