@@ -92,6 +92,11 @@ class AppCatalogInspectorRouterTests(unittest.TestCase):
             console_output=output.append,
         )
 
+        joined_output = "\n".join(output)
+
+        self.assertIn("NitroSense gaming profile:", joined_output)
+        self.assertIn("Set NitroSense gaming profile", joined_output)
+        self.assertIn("Max out NitroSense fans", joined_output)
         self.assertEqual(result.skill_name, "show_local_controls")
         self.assertIn(
             "Avens Safe Local Controls",

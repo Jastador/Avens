@@ -116,6 +116,38 @@ class CommandBenchmarkTests(unittest.TestCase):
             "Search files portable Ollama.",
             COMMAND_INITIAL_PROMPT,
         )
+        self.assertIn(
+            "set nitrosense gaming profile",
+            PHRASE_SETS["commands"],
+        )
+        self.assertIn(
+            "enable gaming performance",
+            PHRASE_SETS["commands"],
+        )
+        self.assertIn(
+            "max out nitrosense fans",
+            PHRASE_SETS["commands"],
+        )
+        self.assertIn(
+            "confirm nitrosense gaming profile",
+            PHRASE_SETS["commands"],
+        )
+        self.assertIn(
+            "cancel nitrosense gaming profile",
+            PHRASE_SETS["commands"],
+        )
+        self.assertIn(
+            "NitroSense",
+            COMMAND_HOTWORDS,
+        )
+        self.assertIn(
+            "Set NitroSense gaming profile.",
+            COMMAND_INITIAL_PROMPT,
+        )
+        self.assertIn(
+            "Confirm NitroSense gaming profile.",
+            COMMAND_INITIAL_PROMPT,
+        )
 
     def test_command_benchmark_includes_note_deletion_terms(self):
         self.assertIn(
