@@ -158,6 +158,13 @@ class AppCatalogInspectorTests(unittest.TestCase):
             "What files can you search?",
             guide,
         )
+        self.assertIn("NitroSense gaming profile:", guide)
+        self.assertIn("Set NitroSense gaming profile", guide)
+        self.assertIn("Max out NitroSense fans", guide)
+        self.assertIn(
+            "Requires confirmation before changing laptop performance or fans.",
+            guide,
+        )
 
     def test_app_controls_guide_uses_the_catalog_display_name(self):
         guide = build_app_controls_guide(self.catalog[0])

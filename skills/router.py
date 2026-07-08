@@ -104,6 +104,17 @@ from skills.close_confirmation import (
     close_confirmation_store,
 )
 
+from skills.nitrosense_confirmation import (
+    NitroSenseGamingProfileConfirmationStore,
+    nitrosense_gaming_profile_confirmation_store,
+)
+
+from tools.nitrosense_gaming_profile import (
+    NitroSenseControlError,
+    NitroSenseGamingProfileReport,
+    apply_nitrosense_gaming_profile,
+)
+
 from skills.named_window import (
     NamedWindowMatchResult,
     NamedWindowResult,
@@ -325,6 +336,16 @@ NAMED_WINDOW_CLOSE_SKILL = LocalSkillDefinition(
         "close",
         "close_all",
         "exact_catalog_app_name",
+    ),
+    offline=True,
+    requires_confirmation=True,
+)
+
+NITROSENSE_GAMING_PROFILE_SKILL = LocalSkillDefinition(
+    name="set_nitrosense_gaming_profile",
+    allowed_arguments=(
+        "performance_mode",
+        "fan_max",
     ),
     offline=True,
     requires_confirmation=True,
@@ -802,6 +823,54 @@ NAMED_WINDOW_CONTROL_PATTERN = re.compile(
     re.IGNORECASE,
 )
 
+NITROSENSE_GAMING_PROFILE_PATTERN = re.compile(
+    r"^\s*"
+    r"(?:(?:and|or|then)\s+)?"
+    r"(?:(?:can|could|would|will)\s+you\s+)?"
+    r"(?:please\s+)?"
+    r"(?:"
+    r"(?:set|enable|apply|start)\s+"
+    r"(?:the\s+)?"
+    r"nitrosense\s+gaming\s+profile"
+    r"|enable\s+gaming\s+performance"
+    r"|set\s+nitrosense\s+to\s+performance\s+mode"
+    r"|set\s+nitrosense\s+fans?\s+to\s+max"
+    r"|max(?:imum)?\s+(?:out\s+)?nitrosense\s+fans?"
+    r"|max(?:imum)?\s+(?:out\s+)?fans?\s+in\s+nitrosense"
+    r")"
+    r"(?:\s+please)?"
+    r"\s*[.!?]*\s*$",
+    re.IGNORECASE,
+)
+
+CONFIRM_NITROSENSE_GAMING_PROFILE_PATTERN = re.compile(
+    r"^\s*"
+    r"(?:(?:and|or|then)\s+)?"
+    r"(?:(?:can|could|would|will)\s+you\s+)?"
+    r"(?:please\s+)?"
+    r"confirm\s+"
+    r"(?:(?:the\s+)?)"
+    r"(?:nitrosense\s+)?"
+    r"gaming\s+profile"
+    r"(?:\s+please)?"
+    r"\s*[.!?]*\s*$",
+    re.IGNORECASE,
+)
+
+CANCEL_NITROSENSE_GAMING_PROFILE_PATTERN = re.compile(
+    r"^\s*"
+    r"(?:(?:and|or|then)\s+)?"
+    r"(?:cancel\s+"
+    r"(?:(?:the\s+)?)"
+    r"(?:nitrosense\s+)?"
+    r"gaming\s+profile"
+    r"|never\s+mind"
+    r"|forget\s+it)"
+    r"(?:\s+please)?"
+    r"\s*[.!?]*\s*$",
+    re.IGNORECASE,
+)
+
 NAMED_WINDOW_CLOSE_PATTERN = re.compile(
     r"^\s*"
     r"(?:(?:and|or|then)\s+)?"
@@ -852,6 +921,9 @@ LOCAL_SKILL_REQUEST_PATTERNS = (
     APP_CATALOG_SEARCH_PATTERN,
     LOCAL_FILE_SEARCH_PATTERN,
     LOCAL_FILE_SEARCH_SCOPE_PATTERN,
+    NITROSENSE_GAMING_PROFILE_PATTERN,
+    CONFIRM_NITROSENSE_GAMING_PROFILE_PATTERN,
+    CANCEL_NITROSENSE_GAMING_PROFILE_PATTERN,
     LOCAL_NOTE_CREATE_PATTERN,
     LOCAL_NOTE_LIST_PATTERN,
     LOCAL_NOTE_SEARCH_PATTERN,
@@ -876,7 +948,6 @@ LOCAL_SKILL_REQUEST_PATTERNS = (
     CONFIRM_NAMED_WINDOW_CLOSE_PATTERN,
     CANCEL_NAMED_WINDOW_CLOSE_PATTERN,
 )
-
 
 def is_explicit_local_skill_request(user_input: str) -> bool:
     """Return whether text has an explicit local-skill grammar match.
@@ -938,7 +1009,6 @@ def _clean_close_target(
 
     return cleaned
 
-
 def _close_confirmation_phrase(
     requested_name: str,
     *,
@@ -950,6 +1020,34 @@ def _close_confirmation_phrase(
 
     return (
         f"Confirm close {scope}{requested_name}{suffix}"
+    )
+
+def _format_nitrosense_gaming_profile_report(
+    report: NitroSenseGamingProfileReport,
+) -> str:
+    """Format the verified NitroSense gaming-profile result."""
+    performance_status = (
+        "changed"
+        if report.performance_changed
+        else "already selected"
+    )
+    fan_status = (
+        "changed"
+        if report.fan_max_changed
+        else "already selected"
+    )
+
+    return "\n".join(
+        (
+            "NitroSense gaming profile applied",
+            f"Performance: {performance_status}",
+            f"Fan Max: {fan_status}",
+            (
+                "Visual verification: "
+                f"Performance={report.performance_selected} | "
+                f"Fan Max={report.fan_max_selected}"
+            ),
+        )
     )
 
 def route_local_skill(
@@ -979,6 +1077,13 @@ def route_local_skill(
     close_confirmations: CloseConfirmationStore = (
         close_confirmation_store
     ),
+    nitrosense_gaming_profile_confirmations: (
+        NitroSenseGamingProfileConfirmationStore
+    ) = nitrosense_gaming_profile_confirmation_store,
+    apply_nitrosense_profile: Callable[
+        [],
+        NitroSenseGamingProfileReport,
+    ] = apply_nitrosense_gaming_profile,
     catalog_snapshot: Callable[[], tuple[CatalogApp, ...]] = (
         get_catalog_snapshot
     ),
@@ -1063,6 +1168,131 @@ def route_local_skill(
     ),
 ) -> SkillResult | None:
     """Handle explicit local skills before AI or legacy tools."""
+    confirm_nitrosense_match = (
+        CONFIRM_NITROSENSE_GAMING_PROFILE_PATTERN.match(user_input)
+    )
+
+    if confirm_nitrosense_match is not None:
+        decision = nitrosense_gaming_profile_confirmations.confirm()
+
+        if decision.status == "none":
+            return SkillResult(
+                handled=True,
+                skill_name=NITROSENSE_GAMING_PROFILE_SKILL.name,
+                message=(
+                    "There is no pending NitroSense gaming profile "
+                    "request to confirm, sir."
+                ),
+                offline=NITROSENSE_GAMING_PROFILE_SKILL.offline,
+                requires_confirmation=(
+                    NITROSENSE_GAMING_PROFILE_SKILL
+                    .requires_confirmation
+                ),
+            )
+
+        if decision.status == "expired":
+            return SkillResult(
+                handled=True,
+                skill_name=NITROSENSE_GAMING_PROFILE_SKILL.name,
+                message=(
+                    "That NitroSense gaming profile confirmation "
+                    "expired. Ask me to set it again, sir."
+                ),
+                offline=NITROSENSE_GAMING_PROFILE_SKILL.offline,
+                requires_confirmation=(
+                    NITROSENSE_GAMING_PROFILE_SKILL
+                    .requires_confirmation
+                ),
+            )
+
+        try:
+            report = apply_nitrosense_profile()
+        except (NitroSenseControlError, RuntimeError) as error:
+            console_output(f"NitroSense control error: {error}")
+
+            return SkillResult(
+                handled=True,
+                skill_name=NITROSENSE_GAMING_PROFILE_SKILL.name,
+                message=(
+                    "I could not safely apply the NitroSense gaming "
+                    "profile, sir."
+                ),
+                offline=NITROSENSE_GAMING_PROFILE_SKILL.offline,
+                requires_confirmation=(
+                    NITROSENSE_GAMING_PROFILE_SKILL
+                    .requires_confirmation
+                ),
+            )
+
+        console_output(
+            _format_nitrosense_gaming_profile_report(report)
+        )
+
+        return SkillResult(
+            handled=True,
+            skill_name=NITROSENSE_GAMING_PROFILE_SKILL.name,
+            message=(
+                "NitroSense gaming profile applied and verified, sir."
+            ),
+            offline=NITROSENSE_GAMING_PROFILE_SKILL.offline,
+            requires_confirmation=(
+                NITROSENSE_GAMING_PROFILE_SKILL
+                .requires_confirmation
+            ),
+        )
+
+    cancel_nitrosense_match = (
+        CANCEL_NITROSENSE_GAMING_PROFILE_PATTERN.match(user_input)
+    )
+
+    if cancel_nitrosense_match is not None:
+        cancelled_request = (
+            nitrosense_gaming_profile_confirmations.cancel()
+        )
+
+        if cancelled_request is None:
+            message = (
+                "There is no pending NitroSense gaming profile "
+                "request to cancel, sir."
+            )
+        else:
+            message = (
+                "Pending NitroSense gaming profile request cancelled, "
+                "sir."
+            )
+
+        return SkillResult(
+            handled=True,
+            skill_name=NITROSENSE_GAMING_PROFILE_SKILL.name,
+            message=message,
+            offline=NITROSENSE_GAMING_PROFILE_SKILL.offline,
+            requires_confirmation=(
+                NITROSENSE_GAMING_PROFILE_SKILL
+                .requires_confirmation
+            ),
+        )
+
+    nitrosense_match = NITROSENSE_GAMING_PROFILE_PATTERN.match(
+        user_input
+    )
+
+    if nitrosense_match is not None:
+        nitrosense_gaming_profile_confirmations.begin()
+
+        return SkillResult(
+            handled=True,
+            skill_name=NITROSENSE_GAMING_PROFILE_SKILL.name,
+            message=(
+                "This will set NitroSense to Performance mode and "
+                'Fan Max. Say "Confirm NitroSense gaming profile" '
+                "to continue, sir."
+            ),
+            offline=NITROSENSE_GAMING_PROFILE_SKILL.offline,
+            requires_confirmation=(
+                NITROSENSE_GAMING_PROFILE_SKILL
+                .requires_confirmation
+            ),
+        )
     file_search_scope_match = (
         LOCAL_FILE_SEARCH_SCOPE_PATTERN.match(user_input)
     )

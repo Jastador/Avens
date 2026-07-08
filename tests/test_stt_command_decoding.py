@@ -148,6 +148,30 @@ class SttCommandDecodingTests(unittest.TestCase):
             ),
             1,
         )
+        self.assertIn(
+            "NitroSense",
+            stt.STT_COMMAND_HOTWORDS,
+        )
+        self.assertIn(
+            "max out NitroSense fans",
+            stt.STT_COMMAND_HOTWORDS,
+        )
+        self.assertIn(
+            "confirm NitroSense gaming profile",
+            stt.STT_COMMAND_HOTWORDS,
+        )
+        self.assertIn(
+            "Set NitroSense gaming profile.",
+            stt.STT_COMMAND_INITIAL_PROMPT,
+        )
+        self.assertIn(
+            "Confirm NitroSense gaming profile.",
+            stt.STT_COMMAND_INITIAL_PROMPT,
+        )
+        self.assertIn(
+            "Cancel NitroSense gaming profile.",
+            stt.STT_COMMAND_INITIAL_PROMPT,
+        )
 
     def test_generic_decode_uses_no_command_hints(self):
         fake_model = FakeWhisperModel(["What time is it?"])

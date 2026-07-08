@@ -54,6 +54,11 @@ class LocalSkillIntentTests(unittest.TestCase):
             "Find file Avens roadmap",
             "Search files budget",
             "What files can you search?",
+            "Set NitroSense gaming profile",
+            "Enable gaming performance",
+            "Max out NitroSense fans",
+            "Confirm NitroSense gaming profile",
+            "Cancel NitroSense gaming profile",
         )
 
         for user_input in requests:
@@ -93,6 +98,9 @@ class LocalSkillIntentTests(unittest.TestCase):
             "Find file",
             "Search files",
             "What files can you",
+            "NitroSense",
+            "gaming performance",
+            "fans are loud",
         )
 
         for user_input in non_commands:

@@ -24,6 +24,11 @@ COMMAND_PHRASES = (
     "search files budget",
     "search files portable ollama",
     "what files can you search",
+    "set nitrosense gaming profile",
+    "enable gaming performance",
+    "max out nitrosense fans",
+    "confirm nitrosense gaming profile",
+    "cancel nitrosense gaming profile",
     "what can i control",
     "what can i do with chrome",
     "take a note buy chicken tomorrow",
@@ -87,6 +92,9 @@ COMMAND_HOTWORDS = (
     "close, confirm, cancel, refresh, app list, list apps, show apps, "
     "search apps, find app, find file, search files, Ollama, "
     "what files can you search, what can I control, what can I do with, "
+    "find file, search files, Ollama, "
+    "NitroSense, gaming profile, gaming performance, "
+    "max out NitroSense fans, confirm NitroSense gaming profile, "
     "take a note, add note, show my notes, list notes, search notes, "
     "delete note, confirm delete note, cancel delete note, "
     "set volume, increase volume, decrease volume, mute volume, "
@@ -107,6 +115,9 @@ COMMAND_INITIAL_PROMPT = (
     "Find file Avens roadmap. Search files budget. "
     "Search files portable Ollama. "
     "What files can you search? What can I control? "
+    "Set NitroSense gaming profile. "
+    "Confirm NitroSense gaming profile. "
+    "Cancel NitroSense gaming profile. "
     "What can I do with Chrome? "
     "Take a note buy chicken tomorrow. Add note finish Avens tests. "
     "Show my notes. List notes. Search notes chicken. "
