@@ -24,6 +24,7 @@ screen-brightness-control
 comtypes
 pycaw
 pywin32
+pywinauto
 
 # HTTP, web research, and optional online services
 requests
