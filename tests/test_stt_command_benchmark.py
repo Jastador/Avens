@@ -148,6 +148,26 @@ class CommandBenchmarkTests(unittest.TestCase):
             "Confirm NitroSense gaming profile.",
             COMMAND_INITIAL_PROMPT,
         )
+        self.assertIn(
+            "what routines do you have",
+            PHRASE_SETS["commands"],
+        )
+        self.assertIn(
+            "what does study mode do",
+            PHRASE_SETS["commands"],
+        )
+        self.assertIn(
+            "what does gaming mode do",
+            PHRASE_SETS["commands"],
+        )
+        self.assertIn(
+            "what routines do you have",
+            COMMAND_HOTWORDS,
+        )
+        self.assertIn(
+            "What routines do you have?",
+            COMMAND_INITIAL_PROMPT,
+        )
 
     def test_command_benchmark_includes_note_deletion_terms(self):
         self.assertIn(

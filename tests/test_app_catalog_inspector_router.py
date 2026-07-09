@@ -94,6 +94,12 @@ class AppCatalogInspectorRouterTests(unittest.TestCase):
 
         joined_output = "\n".join(output)
 
+        self.assertIn("Local routines:", joined_output)
+        self.assertIn("What routines do you have?", joined_output)
+        self.assertIn("What does study mode do?", joined_output)
+
+        joined_output = "\n".join(output)
+
         self.assertIn("NitroSense gaming profile:", joined_output)
         self.assertIn("Set NitroSense gaming profile", joined_output)
         self.assertIn("Max out NitroSense fans", joined_output)

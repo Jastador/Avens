@@ -165,6 +165,13 @@ class AppCatalogInspectorTests(unittest.TestCase):
             "Requires confirmation before changing laptop performance or fans.",
             guide,
         )
+        self.assertIn("Local routines:", guide)
+        self.assertIn("What routines do you have?", guide)
+        self.assertIn("What does study mode do?", guide)
+        self.assertIn(
+            "Preview only for now. No apps or settings are changed.",
+            guide,
+        )
 
     def test_app_controls_guide_uses_the_catalog_display_name(self):
         guide = build_app_controls_guide(self.catalog[0])
