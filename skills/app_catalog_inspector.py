@@ -310,7 +310,7 @@ def build_supported_controls_guide() -> str:
             "- What does study mode do?",
             "- Start study mode",
             "- Start gaming mode",
-            "- URL groups are still configured privately and not opened yet.",
+            "- URL groups open only from private approved config.",
             "",
             "NitroSense gaming profile:",
             "- Set NitroSense gaming profile",

@@ -14,6 +14,12 @@ from skills.local_reminders import (
     REMINDER_KIND_TIMER,
     save_reminder,
 )
+from skills.local_routine_urls import (
+    LocalRoutineUrlError,
+    LocalRoutineUrlNotConfiguredError,
+    UrlGroupOpenReport,
+    open_approved_url_group,
+)
 from skills.reminder_schedule import (
     ReminderSchedule,
     ReminderScheduleError,
@@ -468,6 +474,32 @@ def _run_timer_action(
         ),
     )
 
+def _run_url_group_action(
+    action: RoutineAction,
+    *,
+    open_url_group: Callable[[str], UrlGroupOpenReport],
+) -> RoutineStepResult:
+    """Run one approved private URL group action."""
+    try:
+        report = open_url_group(action.argument)
+    except LocalRoutineUrlNotConfiguredError as error:
+        return RoutineStepResult(
+            action=action,
+            status=ROUTINE_STEP_SKIPPED,
+            message=str(error),
+        )
+
+    opened_count = len(report.opened_urls)
+    url_word = "URL" if opened_count == 1 else "URLs"
+
+    return RoutineStepResult(
+        action=action,
+        status=ROUTINE_STEP_DONE,
+        message=(
+            f"Opened {opened_count} approved {url_word} "
+            f"for '{report.group_name}'."
+        ),
+    )
 
 def _run_routine_action(
     action: RoutineAction,
@@ -481,6 +513,7 @@ def _run_routine_action(
     ],
     save_timer: Callable[..., LocalReminder],
     open_night_light: Callable[[], None],
+    open_url_group: Callable[[str], UrlGroupOpenReport],
     begin_nitrosense_confirmation: Callable[[], object] | None,
 ) -> RoutineStepResult:
     """Run one routine action using only approved local primitives."""
@@ -491,13 +524,9 @@ def _run_routine_action(
         )
 
     if action.action_type == ACTION_APPROVED_URL_GROUP:
-        return RoutineStepResult(
-            action=action,
-            status=ROUTINE_STEP_SKIPPED,
-            message=(
-                f"URL group '{action.argument}' is configured "
-                "privately later and was not opened."
-            ),
+        return _run_url_group_action(
+            action,
+            open_url_group=open_url_group,
         )
 
     if action.action_type == ACTION_SET_BRIGHTNESS:
@@ -562,6 +591,9 @@ def run_local_routine(
     ] = schedule_after_duration,
     save_timer: Callable[..., LocalReminder] = save_reminder,
     open_night_light: Callable[[], None] = open_night_light_settings,
+    open_url_group: Callable[[str], UrlGroupOpenReport] = (
+        open_approved_url_group
+    ),
     begin_nitrosense_confirmation: Callable[[], object] | None = None,
 ) -> LocalRoutineRunReport:
     """Run one deterministic local routine safely."""
@@ -577,12 +609,14 @@ def run_local_routine(
                 schedule_timer_after=schedule_timer_after,
                 save_timer=save_timer,
                 open_night_light=open_night_light,
+                open_url_group=open_url_group,
                 begin_nitrosense_confirmation=(
                     begin_nitrosense_confirmation
                 ),
             )
         except (
             LocalRemindersError,
+            LocalRoutineUrlError,
             ReminderScheduleError,
             SystemControlError,
             ValueError,
@@ -647,8 +681,8 @@ def format_routine_run_report(
         for step in report.steps
     ):
         lines.append(
-            "Skipped actions are intentionally not configured for "
-            "execution yet."
+            "Skipped actions are either not configured privately yet "
+            "or intentionally unavailable."
         )
 
     return "\n".join(lines)

@@ -18,6 +18,10 @@ from skills.local_routines import (
     list_local_routines,
     run_local_routine,
 )
+from skills.local_routine_urls import (
+    LocalRoutineUrlNotConfiguredError,
+    UrlGroupOpenReport,
+)
 from skills.system_controls import BrightnessState, VolumeState
 
 
@@ -83,6 +87,47 @@ class LocalRoutinesTests(unittest.TestCase):
             formatted,
         )
 
+    def test_study_runner_skips_missing_private_url_group(self):
+        routine = get_routine_definition("study mode")
+
+        def open_url_group(group_name: str) -> UrlGroupOpenReport:
+            raise LocalRoutineUrlNotConfiguredError(
+                f"Approved URL group '{group_name}' is not configured."
+            )
+
+        report = run_local_routine(
+            routine,
+            launch_app=lambda name: LaunchResult(
+                success=True,
+                display_name=name,
+                message=f"Launched {name}",
+            ),
+            set_brightness=lambda level: BrightnessState(level=level),
+            set_volume=lambda level: VolumeState(
+                level=level,
+                muted=False,
+            ),
+            schedule_timer_after=lambda **_: SimpleNamespace(
+                due_at_utc=datetime(2026, 1, 1, tzinfo=UTC),
+                description="in 50 minutes",
+            ),
+            save_timer=lambda *_args, **_kwargs: SimpleNamespace(
+                reminder_id=7
+            ),
+            open_night_light=lambda: None,
+            open_url_group=open_url_group,
+        )
+
+        self.assertFalse(report.has_failed_steps)
+        self.assertIn(
+            ROUTINE_STEP_SKIPPED,
+            [step.status for step in report.steps],
+        )
+        self.assertIn(
+            "not configured",
+            format_routine_run_report(report),
+        )
+
     def test_gaming_preview_marks_nitrosense_confirmation(self):
         routine = get_routine_definition("gaming mode")
         formatted = format_routine_preview(routine)
@@ -92,7 +137,7 @@ class LocalRoutinesTests(unittest.TestCase):
         self.assertIn("Performance mode and Fan Max", formatted)
         self.assertIn("[requires confirmation]", formatted)
 
-    def test_study_runner_executes_safe_actions_and_skips_urls(self):
+    def test_study_runner_executes_safe_actions_and_opens_urls(self):
         routine = get_routine_definition("study mode")
         calls = []
         due_at = datetime(2026, 1, 1, tzinfo=UTC)
@@ -131,6 +176,13 @@ class LocalRoutinesTests(unittest.TestCase):
             )
             return SimpleNamespace(reminder_id=7)
 
+        def open_url_group(group_name: str) -> UrlGroupOpenReport:
+            calls.append(("urls", group_name))
+            return UrlGroupOpenReport(
+                group_name=group_name,
+                opened_urls=("https://example.com/study",),
+            )
+
         def open_night_light() -> None:
             calls.append(("night_light", None))
 
@@ -142,6 +194,7 @@ class LocalRoutinesTests(unittest.TestCase):
             schedule_timer_after=schedule_timer_after,
             save_timer=save_timer,
             open_night_light=open_night_light,
+            open_url_group=open_url_group,
         )
 
         statuses = [step.status for step in report.steps]
@@ -149,10 +202,11 @@ class LocalRoutinesTests(unittest.TestCase):
         self.assertFalse(report.has_failed_steps)
         self.assertFalse(report.requires_followup_confirmation)
         self.assertIn(ROUTINE_STEP_DONE, statuses)
-        self.assertIn(ROUTINE_STEP_SKIPPED, statuses)
+        self.assertNotIn(ROUTINE_STEP_SKIPPED, statuses)
         self.assertIn(("launch", "Google Chrome"), calls)
         self.assertIn(("brightness", 100), calls)
         self.assertIn(("volume", 50), calls)
+        self.assertIn(("urls", "study"), calls)
         self.assertIn(
             (
                 "timer",

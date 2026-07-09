@@ -102,6 +102,10 @@ class AppCatalogInspectorRouterTests(unittest.TestCase):
         self.assertIn("What does study mode do?", joined_output)
         self.assertIn("Start study mode", joined_output)
         self.assertIn("Start gaming mode", joined_output)
+        self.assertIn(
+            "URL groups open only from private approved config.",
+            joined_output,
+        )
 
         joined_output = "\n".join(output)
 

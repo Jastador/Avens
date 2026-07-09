@@ -174,7 +174,7 @@ class AppCatalogInspectorTests(unittest.TestCase):
         self.assertIn("Start study mode", guide)
         self.assertIn("Start gaming mode", guide)
         self.assertIn(
-            "URL groups are still configured privately and not opened yet.",
+            "URL groups open only from private approved config.",
             guide,
         )
 
