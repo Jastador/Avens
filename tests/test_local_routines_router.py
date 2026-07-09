@@ -3,10 +3,34 @@ from __future__ import annotations
 import unittest
 
 from skills.local_routines import (
+    ROUTINE_STEP_DONE,
+    ROUTINE_STEP_FAILED,
+    ROUTINE_STEP_NEEDS_CONFIRMATION,
     LocalRoutineError,
+    LocalRoutineRunReport,
+    RoutineStepResult,
     get_routine_definition,
 )
 from skills.router import route_local_skill
+
+
+def _make_report(
+    routine_name: str,
+    *,
+    status: str = ROUTINE_STEP_DONE,
+) -> LocalRoutineRunReport:
+    routine = get_routine_definition(routine_name)
+
+    return LocalRoutineRunReport(
+        routine=routine,
+        steps=(
+            RoutineStepResult(
+                action=routine.actions[0],
+                status=status,
+                message="stub step",
+            ),
+        ),
+    )
 
 
 class LocalRoutinesRouterTests(unittest.TestCase):
@@ -104,6 +128,66 @@ class LocalRoutinesRouterTests(unittest.TestCase):
             "I printed the Project/Dev Mode preview, sir.",
         )
         self.assertEqual(output, ["preview: project_dev"])
+
+    def test_starts_study_mode_and_prints_run_report(self):
+        output = []
+
+        result = route_local_skill(
+            "Start study mode",
+            run_local_routine_plan=lambda routine, **_: _make_report(
+                routine.display_name
+            ),
+            format_local_routine_run_report=lambda _: "run report",
+            console_output=output.append,
+        )
+
+        self.assertEqual(result.skill_name, "start_local_routine")
+        self.assertEqual(
+            result.message,
+            "I started Study Mode, sir.",
+        )
+        self.assertEqual(output, ["run report"])
+
+    def test_starts_gaming_mode_with_confirmation_followup(self):
+        output = []
+
+        result = route_local_skill(
+            "Start gaming mode",
+            run_local_routine_plan=lambda routine, **_: _make_report(
+                routine.display_name,
+                status=ROUTINE_STEP_NEEDS_CONFIRMATION,
+            ),
+            format_local_routine_run_report=lambda _: "gaming report",
+            console_output=output.append,
+        )
+
+        self.assertEqual(result.skill_name, "start_local_routine")
+        self.assertEqual(
+            result.message,
+            "I started Gaming Mode. NitroSense still needs "
+            "confirmation, sir.",
+        )
+        self.assertEqual(output, ["gaming report"])
+
+    def test_start_routine_reports_failures(self):
+        output = []
+
+        result = route_local_skill(
+            "Start project mode",
+            run_local_routine_plan=lambda routine, **_: _make_report(
+                routine.display_name,
+                status=ROUTINE_STEP_FAILED,
+            ),
+            format_local_routine_run_report=lambda _: "failure report",
+            console_output=output.append,
+        )
+
+        self.assertEqual(result.skill_name, "start_local_routine")
+        self.assertEqual(
+            result.message,
+            "I ran Project/Dev Mode with some failures, sir.",
+        )
+        self.assertEqual(output, ["failure report"])
 
 
 if __name__ == "__main__":

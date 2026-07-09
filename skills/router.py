@@ -122,6 +122,9 @@ from skills.local_routines import (
     format_routine_preview,
     get_routine_definition,
     list_local_routines,
+    LocalRoutineRunReport,
+    format_routine_run_report,
+    run_local_routine,
 )
 
 from skills.named_window import (
@@ -369,6 +372,13 @@ LIST_LOCAL_ROUTINES_SKILL = LocalSkillDefinition(
 
 SHOW_LOCAL_ROUTINE_SKILL = LocalSkillDefinition(
     name="show_local_routine",
+    allowed_arguments=("routine_name",),
+    offline=True,
+    requires_confirmation=False,
+)
+
+START_LOCAL_ROUTINE_SKILL = LocalSkillDefinition(
+    name="start_local_routine",
     allowed_arguments=("routine_name",),
     offline=True,
     requires_confirmation=False,
@@ -872,6 +882,19 @@ LOCAL_ROUTINE_NAME_SOURCE = (
     r"(?:\s+mode)?"
 )
 
+LOCAL_ROUTINE_START_PATTERN = re.compile(
+    r"^\s*"
+    r"(?:(?:and|or|then)\s+)?"
+    r"(?:(?:can|could|would|will)\s+you\s+)?"
+    r"(?:please\s+)?"
+    r"(?:start|run|begin|activate)\s+"
+    r"(?:the\s+)?"
+    rf"(?P<routine>{LOCAL_ROUTINE_NAME_SOURCE})"
+    r"(?:\s+please)?"
+    r"\s*[.!?]*\s*$",
+    re.IGNORECASE,
+)
+
 LOCAL_ROUTINE_PREVIEW_PATTERN = re.compile(
     r"^\s*"
     r"(?:(?:and|or|then)\s+)?"
@@ -990,6 +1013,7 @@ LOCAL_SKILL_REQUEST_PATTERNS = (
     APP_CATALOG_SEARCH_PATTERN,
     LOCAL_FILE_SEARCH_PATTERN,
     LOCAL_FILE_SEARCH_SCOPE_PATTERN,
+    LOCAL_ROUTINE_START_PATTERN,
     LOCAL_ROUTINE_LIST_PATTERN,
     LOCAL_ROUTINE_PREVIEW_PATTERN,
     NITROSENSE_GAMING_PROFILE_PATTERN,
@@ -1192,6 +1216,14 @@ def route_local_skill(
         [LocalRoutine],
         str,
     ] = format_routine_preview,
+    run_local_routine_plan: Callable[
+        ...,
+        LocalRoutineRunReport,
+    ] = run_local_routine,
+    format_local_routine_run_report: Callable[
+        [LocalRoutineRunReport],
+        str,
+    ] = format_routine_run_report,
     save_local_note: Callable[[str], LocalNote] = save_note,
     load_local_notes: Callable[[], tuple[LocalNote, ...]] = (
         load_notes
@@ -1262,6 +1294,79 @@ def route_local_skill(
     ),
 ) -> SkillResult | None:
     """Handle explicit local skills before AI or legacy tools."""
+    routine_start_match = LOCAL_ROUTINE_START_PATTERN.match(
+        user_input
+    )
+
+    if routine_start_match is not None:
+        requested_routine = _clean_target(
+            routine_start_match.group("routine")
+        )
+
+        try:
+            routine = get_local_routine(requested_routine)
+        except LocalRoutineError as error:
+            console_output(f"Local routine error: {error}")
+
+            return SkillResult(
+                handled=True,
+                skill_name=START_LOCAL_ROUTINE_SKILL.name,
+                message=(
+                    f"I could not find a local routine named "
+                    f"{requested_routine or 'that'}, sir."
+                ),
+                offline=START_LOCAL_ROUTINE_SKILL.offline,
+                requires_confirmation=(
+                    START_LOCAL_ROUTINE_SKILL.requires_confirmation
+                ),
+            )
+
+        try:
+            report = run_local_routine_plan(
+                routine,
+                begin_nitrosense_confirmation=(
+                    nitrosense_gaming_profile_confirmations.begin
+                ),
+            )
+        except LocalRoutineError as error:
+            console_output(f"Local routine error: {error}")
+
+            return SkillResult(
+                handled=True,
+                skill_name=START_LOCAL_ROUTINE_SKILL.name,
+                message=(
+                    f"I could not start {routine.display_name} "
+                    "safely, sir."
+                ),
+                offline=START_LOCAL_ROUTINE_SKILL.offline,
+                requires_confirmation=(
+                    START_LOCAL_ROUTINE_SKILL.requires_confirmation
+                ),
+            )
+
+        console_output(format_local_routine_run_report(report))
+
+        if report.has_failed_steps:
+            message = (
+                f"I ran {routine.display_name} with some failures, sir."
+            )
+        elif report.requires_followup_confirmation:
+            message = (
+                f"I started {routine.display_name}. NitroSense still "
+                "needs confirmation, sir."
+            )
+        else:
+            message = f"I started {routine.display_name}, sir."
+
+        return SkillResult(
+            handled=True,
+            skill_name=START_LOCAL_ROUTINE_SKILL.name,
+            message=message,
+            offline=START_LOCAL_ROUTINE_SKILL.offline,
+            requires_confirmation=(
+                START_LOCAL_ROUTINE_SKILL.requires_confirmation
+            ),
+        )
     routine_list_match = LOCAL_ROUTINE_LIST_PATTERN.match(
         user_input
     )

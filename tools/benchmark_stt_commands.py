@@ -28,6 +28,11 @@ COMMAND_PHRASES = (
     "what does study mode do",
     "what does gaming mode do",
     "what does market prep mode do",
+    "start study mode",
+    "start project mode",
+    "start gaming mode",
+    "start market prep mode",
+    "run gaming mode",
     "set nitrosense gaming profile",
     "enable gaming performance",
     "max out nitrosense fans",
@@ -99,6 +104,8 @@ COMMAND_HOTWORDS = (
     "find file, search files, Ollama, "
     "routines, study mode, gaming mode, market prep mode, "
     "what routines do you have, what does study mode do, "
+    "start study mode, start project mode, start gaming mode, "
+    "start market prep mode, run gaming mode, "
     "NitroSense, gaming profile, gaming performance, "
     "max out NitroSense fans, confirm NitroSense gaming profile, "
     "take a note, add note, show my notes, list notes, search notes, "
@@ -126,6 +133,9 @@ COMMAND_INITIAL_PROMPT = (
     "What does study mode do? "
     "What does gaming mode do? "
     "What does market prep mode do? "
+    "Start study mode. "
+    "Start gaming mode. "
+    "Start market prep mode. "
     "Set NitroSense gaming profile. "
     "Confirm NitroSense gaming profile. "
     "Cancel NitroSense gaming profile. "

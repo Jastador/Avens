@@ -184,6 +184,18 @@ class SttCommandDecodingTests(unittest.TestCase):
             "What does study mode do?",
             stt.STT_COMMAND_INITIAL_PROMPT,
         )
+        self.assertIn(
+            "start study mode",
+            stt.STT_COMMAND_HOTWORDS,
+        )
+        self.assertIn(
+            "Start study mode.",
+            stt.STT_COMMAND_INITIAL_PROMPT,
+        )
+        self.assertIn(
+            "Start gaming mode.",
+            stt.STT_COMMAND_INITIAL_PROMPT,
+        )
 
     def test_generic_decode_uses_no_command_hints(self):
         fake_model = FakeWhisperModel(["What time is it?"])

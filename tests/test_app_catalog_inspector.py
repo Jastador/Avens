@@ -168,8 +168,13 @@ class AppCatalogInspectorTests(unittest.TestCase):
         self.assertIn("Local routines:", guide)
         self.assertIn("What routines do you have?", guide)
         self.assertIn("What does study mode do?", guide)
+        self.assertIn("Local routines:", guide)
+        self.assertIn("What routines do you have?", guide)
+        self.assertIn("What does study mode do?", guide)
+        self.assertIn("Start study mode", guide)
+        self.assertIn("Start gaming mode", guide)
         self.assertIn(
-            "Preview only for now. No apps or settings are changed.",
+            "URL groups are still configured privately and not opened yet.",
             guide,
         )
 

@@ -168,6 +168,30 @@ class CommandBenchmarkTests(unittest.TestCase):
             "What routines do you have?",
             COMMAND_INITIAL_PROMPT,
         )
+        self.assertIn(
+            "start study mode",
+            PHRASE_SETS["commands"],
+        )
+        self.assertIn(
+            "start gaming mode",
+            PHRASE_SETS["commands"],
+        )
+        self.assertIn(
+            "run gaming mode",
+            PHRASE_SETS["commands"],
+        )
+        self.assertIn(
+            "start study mode",
+            COMMAND_HOTWORDS,
+        )
+        self.assertIn(
+            "Start study mode.",
+            COMMAND_INITIAL_PROMPT,
+        )
+        self.assertIn(
+            "Start gaming mode.",
+            COMMAND_INITIAL_PROMPT,
+        )
 
     def test_command_benchmark_includes_note_deletion_terms(self):
         self.assertIn(

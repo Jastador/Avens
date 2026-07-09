@@ -64,6 +64,11 @@ class LocalSkillIntentTests(unittest.TestCase):
             "What does study mode do?",
             "Preview gaming mode",
             "What does market prep mode do?",
+            "Start study mode",
+            "Start project mode",
+            "Start gaming mode",
+            "Start market prep mode",
+            "Run gaming mode",
         )
 
         for user_input in requests:
