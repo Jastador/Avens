@@ -311,6 +311,7 @@ def build_supported_controls_guide() -> str:
             "- Start study mode",
             "- Start gaming mode",
             "- URL groups open only from private approved config.",
+            "- Brightness and volume can be overridden in private settings.",
             "",
             "NitroSense gaming profile:",
             "- Set NitroSense gaming profile",

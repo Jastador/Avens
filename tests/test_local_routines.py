@@ -5,6 +5,7 @@ from types import SimpleNamespace
 import unittest
 
 from skills.app_launcher import LaunchResult
+from skills.local_routine_settings import RoutineSettings
 from skills.local_reminders import REMINDER_KIND_TIMER
 from skills.local_routines import (
     ROUTINE_STEP_DONE,
@@ -136,6 +137,57 @@ class LocalRoutinesTests(unittest.TestCase):
         self.assertIn("Discord", formatted)
         self.assertIn("Performance mode and Fan Max", formatted)
         self.assertIn("[requires confirmation]", formatted)
+
+    def test_project_preview_includes_android_studio(self):
+        routine = get_routine_definition("project mode")
+        formatted = format_routine_preview(routine)
+
+        self.assertIn("Visual Studio Code", formatted)
+        self.assertIn("Android Studio", formatted)
+        self.assertIn("Google Chrome", formatted)
+
+    def test_runner_applies_private_brightness_volume_settings(self):
+        routine = get_routine_definition("project mode")
+        calls = []
+
+        def launch_app(name: str) -> LaunchResult:
+            calls.append(("launch", name))
+            return LaunchResult(
+                success=True,
+                display_name=name,
+                message=f"Launched {name}",
+            )
+
+        def open_url_group(group_name: str) -> UrlGroupOpenReport:
+            calls.append(("urls", group_name))
+            return UrlGroupOpenReport(
+                group_name=group_name,
+                opened_urls=("https://example.com/project",),
+            )
+
+        report = run_local_routine(
+            routine,
+            launch_app=launch_app,
+            set_brightness=lambda level: calls.append(
+                ("brightness", level)
+            ) or BrightnessState(level=level),
+            set_volume=lambda level: calls.append(
+                ("volume", level)
+            ) or VolumeState(level=level, muted=False),
+            open_url_group=open_url_group,
+            routine_settings=RoutineSettings(
+                brightness=80,
+                volume=35,
+            ),
+        )
+
+        self.assertFalse(report.has_failed_steps)
+        self.assertIn(("launch", "Visual Studio Code"), calls)
+        self.assertIn(("launch", "Android Studio"), calls)
+        self.assertIn(("launch", "Google Chrome"), calls)
+        self.assertIn(("urls", "project"), calls)
+        self.assertIn(("brightness", 80), calls)
+        self.assertIn(("volume", 35), calls)
 
     def test_study_runner_executes_safe_actions_and_opens_urls(self):
         routine = get_routine_definition("study mode")
@@ -278,6 +330,10 @@ class LocalRoutinesTests(unittest.TestCase):
             set_volume=lambda level: VolumeState(
                 level=level,
                 muted=False,
+            ),
+            open_url_group=lambda group_name: UrlGroupOpenReport(
+                group_name=group_name,
+                opened_urls=("https://example.com/project",),
             ),
         )
 

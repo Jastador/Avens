@@ -12,7 +12,10 @@ from skills.local_routines import (
     get_routine_definition,
 )
 from skills.router import route_local_skill
-
+from skills.local_routine_settings import (
+    LocalRoutineSettingsError,
+    RoutineSettings,
+)
 
 def _make_report(
     routine_name: str,
@@ -188,6 +191,28 @@ class LocalRoutinesRouterTests(unittest.TestCase):
             "I ran Project/Dev Mode with some failures, sir.",
         )
         self.assertEqual(output, ["failure report"])
+
+    def test_start_routine_handles_private_settings_failure(self):
+        output = []
+
+        result = route_local_skill(
+            "Start study mode",
+            get_local_routine_settings=lambda _: (_ for _ in ()).throw(
+                LocalRoutineSettingsError("bad settings")
+            ),
+            console_output=output.append,
+        )
+
+        self.assertEqual(result.skill_name, "start_local_routine")
+        self.assertEqual(
+            result.message,
+            "I could not read private settings for Study Mode "
+            "safely, sir.",
+        )
+        self.assertIn(
+            "Local routine settings error: bad settings",
+            output,
+        )
 
 
 if __name__ == "__main__":

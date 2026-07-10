@@ -153,6 +153,10 @@ class AppCatalogInspectorRouterTests(unittest.TestCase):
             "What files can you search?",
             "\n".join(output),
         )
+        self.assertIn(
+            "Brightness and volume can be overridden in private settings.",
+            joined_output,
+        )
 
     def test_app_controls_resolve_an_alias_without_launching(self):
         output = []
