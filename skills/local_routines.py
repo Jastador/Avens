@@ -217,15 +217,27 @@ LOCAL_ROUTINES: Final[tuple[LocalRoutine, ...]] = (
         actions=(
             RoutineAction(
                 label="Launch app",
-                detail="Steam",
+                detail="NitroSense",
                 action_type=ACTION_LAUNCH_APP,
-                argument="Steam",
+                argument="NitroSense",
+            ),
+            RoutineAction(
+                label="Set NitroSense gaming profile",
+                detail="Performance mode and Fan Max",
+                requires_confirmation=True,
+                action_type=ACTION_NITROSENSE_CONFIRMATION,
             ),
             RoutineAction(
                 label="Launch app",
                 detail="Discord",
                 action_type=ACTION_LAUNCH_APP,
                 argument="Discord",
+            ),
+            RoutineAction(
+                label="Launch app",
+                detail="Steam",
+                action_type=ACTION_LAUNCH_APP,
+                argument="Steam",
             ),
             RoutineAction(
                 label="Set brightness",
@@ -238,12 +250,6 @@ LOCAL_ROUTINES: Final[tuple[LocalRoutine, ...]] = (
                 detail="50%",
                 action_type=ACTION_SET_VOLUME,
                 argument="50",
-            ),
-            RoutineAction(
-                label="Set NitroSense gaming profile",
-                detail="Performance mode and Fan Max",
-                requires_confirmation=True,
-                action_type=ACTION_NITROSENSE_CONFIRMATION,
             ),
         ),
     ),
@@ -663,12 +669,14 @@ def run_local_routine(
             RuntimeError,
         ) as error:
             step_result = RoutineStepResult(
-                action=effective_action,
+                action=action,
                 status=ROUTINE_STEP_FAILED,
                 message=str(error),
             )
 
         step_results.append(step_result)
+        if step_result.status == ROUTINE_STEP_NEEDS_CONFIRMATION:
+            break
 
     return LocalRoutineRunReport(
         routine=routine,
@@ -704,6 +712,7 @@ def format_routine_run_report(
         lines.extend(
             (
                 "",
+                "Routine paused before remaining actions.",
                 'Follow-up required: say "Confirm NitroSense gaming '
                 'profile" to apply NitroSense changes.',
             )

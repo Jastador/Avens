@@ -1385,8 +1385,9 @@ def route_local_skill(
             )
         elif report.requires_followup_confirmation:
             message = (
-                f"I started {routine.display_name}. NitroSense still "
-                "needs confirmation, sir."
+                f"I started {routine.display_name} and paused before "
+                "the remaining steps. NitroSense still needs "
+                "confirmation, sir."
             )
         else:
             message = f"I started {routine.display_name}, sir."

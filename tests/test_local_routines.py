@@ -133,10 +133,20 @@ class LocalRoutinesTests(unittest.TestCase):
         routine = get_routine_definition("gaming mode")
         formatted = format_routine_preview(routine)
 
-        self.assertIn("Steam", formatted)
+        self.assertIn("NitroSense", formatted)
         self.assertIn("Discord", formatted)
+        self.assertIn("Steam", formatted)
         self.assertIn("Performance mode and Fan Max", formatted)
         self.assertIn("[requires confirmation]", formatted)
+
+        nitrosense_index = formatted.index(
+            "Performance mode and Fan Max"
+        )
+        discord_index = formatted.index("Discord")
+        steam_index = formatted.index("Steam")
+
+        self.assertLess(nitrosense_index, discord_index)
+        self.assertLess(discord_index, steam_index)
 
     def test_project_preview_includes_android_studio(self):
         routine = get_routine_definition("project mode")
@@ -305,12 +315,24 @@ class LocalRoutinesTests(unittest.TestCase):
 
         self.assertFalse(report.has_failed_steps)
         self.assertTrue(report.requires_followup_confirmation)
-        self.assertIn(("launch", "Steam"), calls)
-        self.assertIn(("launch", "Discord"), calls)
-        self.assertIn(("nitrosense", "begin"), calls)
-        self.assertIn(
-            ROUTINE_STEP_NEEDS_CONFIRMATION,
+        self.assertEqual(
+            calls,
+            [
+                ("launch", "NitroSense"),
+                ("nitrosense", "begin"),
+            ],
+        )
+        self.assertEqual(len(report.steps), 2)
+        self.assertEqual(
             [step.status for step in report.steps],
+            [
+                ROUTINE_STEP_DONE,
+                ROUTINE_STEP_NEEDS_CONFIRMATION,
+            ],
+        )
+        self.assertIn(
+            "Routine paused before remaining actions.",
+            format_routine_run_report(report),
         )
 
     def test_runner_reports_launch_failures_without_stopping(self):

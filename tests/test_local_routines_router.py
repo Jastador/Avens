@@ -167,8 +167,8 @@ class LocalRoutinesRouterTests(unittest.TestCase):
         self.assertEqual(result.skill_name, "start_local_routine")
         self.assertEqual(
             result.message,
-            "I started Gaming Mode. NitroSense still needs "
-            "confirmation, sir.",
+            "I started Gaming Mode and paused before the remaining "
+            "steps. NitroSense still needs confirmation, sir.",
         )
         self.assertEqual(output, ["gaming report"])
 
