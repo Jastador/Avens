@@ -1,9 +1,10 @@
 from __future__ import annotations
 
 from collections.abc import Callable
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from typing import Final
 
+from skills.local_routine_settings import RoutineSettings
 from skills.app_launcher import (
     LaunchResult,
     launch_catalog_app,
@@ -172,6 +173,12 @@ LOCAL_ROUTINES: Final[tuple[LocalRoutine, ...]] = (
                 detail="Visual Studio Code",
                 action_type=ACTION_LAUNCH_APP,
                 argument="Visual Studio Code",
+            ),
+            RoutineAction(
+                label="Launch app",
+                detail="Android Studio",
+                action_type=ACTION_LAUNCH_APP,
+                argument="Android Studio",
             ),
             RoutineAction(
                 label="Launch app",
@@ -382,6 +389,32 @@ def format_routine_preview(
 
     return "\n".join(lines)
 
+def _apply_routine_settings(
+    action: RoutineAction,
+    settings: RoutineSettings,
+) -> RoutineAction:
+    """Apply private brightness and volume overrides to one action."""
+    if (
+        action.action_type == ACTION_SET_BRIGHTNESS
+        and settings.brightness is not None
+    ):
+        return replace(
+            action,
+            detail=f"{settings.brightness}%",
+            argument=str(settings.brightness),
+        )
+
+    if (
+        action.action_type == ACTION_SET_VOLUME
+        and settings.volume is not None
+    ):
+        return replace(
+            action,
+            detail=f"{settings.volume}%",
+            argument=str(settings.volume),
+        )
+
+    return action
 
 def _run_launch_action(
     action: RoutineAction,
@@ -594,15 +627,22 @@ def run_local_routine(
     open_url_group: Callable[[str], UrlGroupOpenReport] = (
         open_approved_url_group
     ),
+    routine_settings: RoutineSettings | None = None,
     begin_nitrosense_confirmation: Callable[[], object] | None = None,
 ) -> LocalRoutineRunReport:
     """Run one deterministic local routine safely."""
     step_results = []
+    settings = routine_settings or RoutineSettings()
 
     for action in routine.actions:
+        effective_action = _apply_routine_settings(
+            action,
+            settings,
+        )
+
         try:
             step_result = _run_routine_action(
-                action,
+                effective_action,
                 launch_app=launch_app,
                 set_brightness=set_brightness,
                 set_volume=set_volume,
@@ -623,7 +663,7 @@ def run_local_routine(
             RuntimeError,
         ) as error:
             step_result = RoutineStepResult(
-                action=action,
+                action=effective_action,
                 status=ROUTINE_STEP_FAILED,
                 message=str(error),
             )

@@ -127,6 +127,12 @@ from skills.local_routines import (
     run_local_routine,
 )
 
+from skills.local_routine_settings import (
+    LocalRoutineSettingsError,
+    RoutineSettings,
+    get_routine_settings,
+)
+
 from skills.named_window import (
     NamedWindowMatchResult,
     NamedWindowResult,
@@ -1224,6 +1230,10 @@ def route_local_skill(
         [LocalRoutineRunReport],
         str,
     ] = format_routine_run_report,
+    get_local_routine_settings: Callable[
+        [str],
+        RoutineSettings,
+    ] = get_routine_settings,
     save_local_note: Callable[[str], LocalNote] = save_note,
     load_local_notes: Callable[[], tuple[LocalNote, ...]] = (
         load_notes
@@ -1322,8 +1332,31 @@ def route_local_skill(
             )
 
         try:
+            routine_settings = get_local_routine_settings(
+                routine.routine_id
+            )
+        except LocalRoutineSettingsError as error:
+            console_output(
+                f"Local routine settings error: {error}"
+            )
+
+            return SkillResult(
+                handled=True,
+                skill_name=START_LOCAL_ROUTINE_SKILL.name,
+                message=(
+                    f"I could not read private settings for "
+                    f"{routine.display_name} safely, sir."
+                ),
+                offline=START_LOCAL_ROUTINE_SKILL.offline,
+                requires_confirmation=(
+                    START_LOCAL_ROUTINE_SKILL.requires_confirmation
+                ),
+            )
+
+        try:
             report = run_local_routine_plan(
                 routine,
+                routine_settings=routine_settings,
                 begin_nitrosense_confirmation=(
                     nitrosense_gaming_profile_confirmations.begin
                 ),
