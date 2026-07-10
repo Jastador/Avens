@@ -21,6 +21,8 @@ dist/
 # Private local content
 knowledge_base/
 jarvis_training.jsonl
+local_data/
+routine_url_groups.json
 
 # Runtime databases / local state
 avens_vector_db/

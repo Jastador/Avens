@@ -59,6 +59,16 @@ class LocalSkillIntentTests(unittest.TestCase):
             "Max out NitroSense fans",
             "Confirm NitroSense gaming profile",
             "Cancel NitroSense gaming profile",
+            "What routines do you have?",
+            "List routines",
+            "What does study mode do?",
+            "Preview gaming mode",
+            "What does market prep mode do?",
+            "Start study mode",
+            "Start project mode",
+            "Start gaming mode",
+            "Start market prep mode",
+            "Run gaming mode",
         )
 
         for user_input in requests:
@@ -101,6 +111,11 @@ class LocalSkillIntentTests(unittest.TestCase):
             "NitroSense",
             "gaming performance",
             "fans are loud",
+            "routine",
+            "study",
+            "gaming",
+            "What does chaos mode do?",
+            "What does Notepad do?",
         )
 
         for user_input in non_commands:
