@@ -17,21 +17,19 @@ VOLUME_MINIMUM = 0
 class LocalRoutineSettingsError(RuntimeError):
     """Raised when private routine settings are unsafe or invalid."""
 
-
 @dataclass(frozen=True)
 class RoutineSettings:
     """Private per-routine runtime settings."""
 
     brightness: int | None = None
     volume: int | None = None
-
+    discord_voice_target_alias: str | None = None
 
 def _normalise_routine_id(value: str) -> str:
     """Normalise routine ids and spoken-ish config keys."""
     return "_".join(
         value.strip().casefold().replace("-", " ").split()
     )
-
 
 def _validate_percent(
     value: object,
@@ -53,6 +51,18 @@ def _validate_percent(
 
     return value
 
+def _validate_non_empty_string(
+    value: object,
+    *,
+    label: str,
+) -> str:
+    """Validate one explicit non-empty string value."""
+    if not isinstance(value, str) or not value.strip():
+        raise LocalRoutineSettingsError(
+            f"{label} must be a non-empty string."
+        )
+
+    return value.strip()
 
 def _parse_routine_settings(
     routine_id: str,
@@ -64,7 +74,11 @@ def _parse_routine_settings(
             f"Routine settings for '{routine_id}' must be an object."
         )
 
-    allowed_keys = {"brightness", "volume"}
+    allowed_keys = {
+        "brightness",
+        "volume",
+        "discord_voice_target_alias",
+    }
     unknown_keys = set(raw_settings) - allowed_keys
 
     if unknown_keys:
@@ -76,12 +90,19 @@ def _parse_routine_settings(
 
     brightness = None
     volume = None
+    discord_voice_target_alias = None
 
     if "brightness" in raw_settings:
         brightness = _validate_percent(
             raw_settings["brightness"],
             label="Brightness",
             minimum=BRIGHTNESS_MINIMUM,
+        )
+
+    if "discord_voice_target_alias" in raw_settings:
+        discord_voice_target_alias = _validate_non_empty_string(
+            raw_settings["discord_voice_target_alias"],
+            label="Discord voice target alias",
         )
 
     if "volume" in raw_settings:
@@ -91,15 +112,20 @@ def _parse_routine_settings(
             minimum=VOLUME_MINIMUM,
         )
 
-    if brightness is None and volume is None:
+    if (
+        brightness is None
+        and volume is None
+        and discord_voice_target_alias is None
+    ):
         raise LocalRoutineSettingsError(
             f"Routine settings for '{routine_id}' must include "
-            "brightness or volume."
+            "brightness, volume, or Discord voice target alias."
         )
 
     return RoutineSettings(
         brightness=brightness,
         volume=volume,
+        discord_voice_target_alias=discord_voice_target_alias,
     )
 
 

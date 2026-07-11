@@ -32,6 +32,7 @@ class LocalRoutineSettingsTests(unittest.TestCase):
                         "study": {
                             "brightness": 90,
                             "volume": 40,
+                            "discord_voice_target_alias": "controller",
                         },
                         "project-dev": {
                             "brightness": 80,
@@ -47,7 +48,11 @@ class LocalRoutineSettingsTests(unittest.TestCase):
 
             self.assertEqual(
                 settings["study"],
-                RoutineSettings(brightness=90, volume=40),
+                RoutineSettings(
+                    brightness=90,
+                    volume=40,
+                    discord_voice_target_alias="controller",
+                ),
             )
             self.assertEqual(
                 settings["project_dev"],
@@ -76,6 +81,31 @@ class LocalRoutineSettingsTests(unittest.TestCase):
                 RoutineSettings(),
             )
 
+    def test_loads_private_discord_voice_target_alias(self):
+        with tempfile.TemporaryDirectory() as directory:
+            settings_file = Path(directory) / "routine_settings.json"
+            settings_file.write_text(
+                json.dumps(
+                    {
+                        "gaming": {
+                            "discord_voice_target_alias": "controller",
+                        },
+                    }
+                ),
+                encoding="utf-8",
+            )
+
+            settings = load_routine_settings(
+                settings_file=settings_file
+            )
+
+            self.assertEqual(
+                settings["gaming"],
+                RoutineSettings(
+                    discord_voice_target_alias="controller",
+                ),
+            )
+
     def test_rejects_invalid_brightness(self):
         with tempfile.TemporaryDirectory() as directory:
             settings_file = Path(directory) / "routine_settings.json"
@@ -101,6 +131,23 @@ class LocalRoutineSettingsTests(unittest.TestCase):
                     {
                         "study": {
                             "volume": 101,
+                        },
+                    }
+                ),
+                encoding="utf-8",
+            )
+
+            with self.assertRaises(LocalRoutineSettingsError):
+                load_routine_settings(settings_file=settings_file)
+
+    def test_rejects_empty_discord_voice_target_alias(self):
+        with tempfile.TemporaryDirectory() as directory:
+            settings_file = Path(directory) / "routine_settings.json"
+            settings_file.write_text(
+                json.dumps(
+                    {
+                        "gaming": {
+                            "discord_voice_target_alias": " ",
                         },
                     }
                 ),
