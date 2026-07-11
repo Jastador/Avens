@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import os
 import unittest
 from pathlib import Path
 
@@ -10,12 +11,16 @@ from skills.app_catalog import (
     PACKAGED_APP_SOURCE,
     CatalogApp,
     LaunchTarget,
+    START_MENU_SOURCE,
 )
 from skills.named_window import (
     build_window_app_identity,
     close_named_app_windows,
     control_named_window,
+    AppWindowIdentity,
+    find_matching_windows,
 )
+
 
 
 class NamedWindowControlTests(unittest.TestCase):
@@ -162,6 +167,85 @@ class NamedWindowControlTests(unittest.TestCase):
             close_all,
             **options,
         )
+
+    def test_builds_process_start_identity_for_updater_shortcut(self):
+        app = CatalogApp(
+            display_name="Discord",
+            normalized_name="discord",
+            launch_path=Path("Discord.lnk"),
+            source=START_MENU_SOURCE,
+        )
+        target = LaunchTarget(
+            target_path=(
+                r"C:\Users\Jastador\AppData\Local\Discord\Update.exe"
+            ),
+            arguments="--processStart Discord.exe",
+            working_directory=(
+                r"C:\Users\Jastador\AppData\Local\Discord"
+            ),
+        )
+
+        identity = build_window_app_identity(
+            app,
+            resolve_launch_target=lambda _: target,
+        )
+
+        self.assertEqual(identity.display_name, "Discord")
+        self.assertIsNone(identity.executable_path)
+        self.assertIsNone(identity.app_user_model_id)
+        self.assertEqual(identity.executable_name, "discord.exe")
+        self.assertEqual(
+            identity.executable_root,
+            os.path.normcase(
+                os.path.normpath(
+                    r"C:\Users\Jastador\AppData\Local\Discord"
+                )
+            ),
+        )
+
+    def test_matches_process_start_window_inside_install_root(self):
+        identity = AppWindowIdentity(
+            display_name="Discord",
+            executable_path=None,
+            app_user_model_id=None,
+            executable_name="discord.exe",
+            executable_root=os.path.normcase(
+                os.path.normpath(
+                    r"C:\Users\Jastador\AppData\Local\Discord"
+                )
+            ),
+        )
+
+        process_paths = {
+            5001: (
+                r"C:\Users\Jastador\AppData\Local\Discord"
+                r"\app-1.0.9245\Discord.exe"
+            ),
+            5002: r"C:\Other\Discord.exe",
+            5003: (
+                r"C:\Users\Jastador\AppData\Local\Discord"
+                r"\Update.exe"
+            ),
+        }
+
+        windows = find_matching_windows(
+            identity,
+            list_top_level_windows=lambda: (101, 102, 103),
+            is_window=lambda _: True,
+            is_window_visible=lambda _: True,
+            get_window_owner=lambda _: 0,
+            get_window_process_id=lambda handle: {
+                101: 5001,
+                102: 5002,
+                103: 5003,
+            }[handle],
+            get_process_image_path=lambda process_id: process_paths[
+                process_id
+            ],
+            get_process_aumid=lambda _: None,
+        )
+
+        self.assertEqual(windows, (101,))
 
     def test_builds_exact_executable_identity(self):
         identity = build_window_app_identity(

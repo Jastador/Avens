@@ -9,6 +9,7 @@ from skills.local_routine_settings import RoutineSettings
 from skills.local_reminders import REMINDER_KIND_TIMER
 from skills.local_routines import (
     ROUTINE_STEP_DONE,
+    ROUTINE_STEP_FAILED,
     ROUTINE_STEP_NEEDS_CONFIRMATION,
     ROUTINE_STEP_SKIPPED,
     LocalRoutineError,
@@ -20,6 +21,9 @@ from skills.local_routines import (
     run_local_routine,
     continue_local_routine_after_confirmation,
 )
+from skills.app_window_wait import AppWindowWaitResult
+from skills.app_process_wait import AppProcessWaitResult
+from skills.app_window_focus import AppWindowFocusResult
 from skills.local_routine_urls import (
     LocalRoutineUrlNotConfiguredError,
     UrlGroupOpenReport,
@@ -134,6 +138,12 @@ class LocalRoutinesTests(unittest.TestCase):
         routine = get_routine_definition("gaming mode")
         formatted = format_routine_preview(routine)
 
+        self.assertIn(
+            "Bring app window to foreground: Discord",
+            formatted,
+        )
+        self.assertIn("Verify app window: Discord", formatted)
+        self.assertIn("Verify app process: Steam", formatted)
         self.assertIn("NitroSense", formatted)
         self.assertIn("Discord", formatted)
         self.assertIn("Steam", formatted)
@@ -143,11 +153,15 @@ class LocalRoutinesTests(unittest.TestCase):
         nitrosense_index = formatted.index(
             "Performance mode and Fan Max"
         )
-        discord_index = formatted.index("Discord")
         steam_index = formatted.index("Steam")
+        discord_index = formatted.index("Discord")
+        focus_index = formatted.index(
+            "Bring app window to foreground: Discord"
+        )
 
-        self.assertLess(nitrosense_index, discord_index)
-        self.assertLess(discord_index, steam_index)
+        self.assertLess(nitrosense_index, steam_index)
+        self.assertLess(steam_index, discord_index)
+        self.assertLess(discord_index, focus_index)
 
     def test_project_preview_includes_android_studio(self):
         routine = get_routine_definition("project mode")
@@ -352,12 +366,41 @@ class LocalRoutinesTests(unittest.TestCase):
                 message=f"Launched {name}",
             )
 
+        def wait_for_window(name: str) -> AppWindowWaitResult:
+            calls.append(("wait_window", name))
+            return AppWindowWaitResult(
+                success=True,
+                display_name=name,
+                window_count=1,
+                message=f"{name} is open with 1 verified window, sir.",
+            )
+
+        def wait_for_process(name: str) -> AppProcessWaitResult:
+            calls.append(("wait_process", name))
+            return AppProcessWaitResult(
+                success=True,
+                display_name=name,
+                process_count=1,
+                message=f"{name} is running with 1 verified process, sir.",
+            )
+
+        def bring_window_to_front(name: str) -> AppWindowFocusResult:
+            calls.append(("focus_window", name))
+            return AppWindowFocusResult(
+                success=True,
+                display_name=name,
+                message=f"Brought {name} to the foreground, sir.",
+            )
+
         report = continue_local_routine_after_confirmation(
             routine,
             confirmed_action_message=(
                 "NitroSense gaming profile applied and verified."
             ),
             launch_app=launch_app,
+            wait_for_window=wait_for_window,
+            wait_for_process=wait_for_process,
+            bring_window_to_front=bring_window_to_front,
             set_brightness=lambda level: calls.append(
                 ("brightness", level)
             ) or BrightnessState(level=level),
@@ -375,8 +418,11 @@ class LocalRoutinesTests(unittest.TestCase):
         self.assertEqual(
             calls,
             [
-                ("launch", "Discord"),
                 ("launch", "Steam"),
+                ("wait_process", "Steam"),
+                ("launch", "Discord"),
+                ("wait_window", "Discord"),
+                ("focus_window", "Discord"),
                 ("brightness", 100),
                 ("volume", 50),
             ],
@@ -389,11 +435,237 @@ class LocalRoutinesTests(unittest.TestCase):
                 ROUTINE_STEP_DONE,
                 ROUTINE_STEP_DONE,
                 ROUTINE_STEP_DONE,
+                ROUTINE_STEP_DONE,
+                ROUTINE_STEP_DONE,
+                ROUTINE_STEP_DONE,
             ],
         )
         self.assertIn(
             "NitroSense gaming profile applied and verified.",
             format_routine_run_report(report),
+        )
+
+    def test_gaming_continuation_stops_when_discord_window_missing(self):
+        routine = get_routine_definition("gaming mode")
+        calls = []
+
+        def launch_app(name: str) -> LaunchResult:
+            calls.append(("launch", name))
+            return LaunchResult(
+                success=True,
+                display_name=name,
+                message=f"Launched {name}",
+            )
+
+        def wait_for_window(name: str) -> AppWindowWaitResult:
+            calls.append(("wait_window", name))
+            return AppWindowWaitResult(
+                success=False,
+                display_name=name,
+                window_count=0,
+                message=f"{name} did not open a verified window.",
+            )
+
+        def wait_for_process(name: str) -> AppProcessWaitResult:
+            calls.append(("wait_process", name))
+            return AppProcessWaitResult(
+                success=True,
+                display_name=name,
+                process_count=1,
+                message=f"{name} is running with 1 verified process, sir.",
+            )
+
+        report = continue_local_routine_after_confirmation(
+            routine,
+            confirmed_action_message=(
+                "NitroSense gaming profile applied and verified."
+            ),
+            launch_app=launch_app,
+            wait_for_window=wait_for_window,
+            wait_for_process=wait_for_process,
+            set_brightness=lambda level: calls.append(
+                ("brightness", level)
+            ) or BrightnessState(level=level),
+            set_volume=lambda level: calls.append(
+                ("volume", level)
+            ) or VolumeState(level=level, muted=False),
+            routine_settings=RoutineSettings(
+                brightness=100,
+                volume=50,
+            ),
+        )
+
+        self.assertTrue(report.has_failed_steps)
+        self.assertEqual(
+            calls,
+            [
+                ("launch", "Steam"),
+                ("wait_process", "Steam"),
+                ("launch", "Discord"),
+                ("wait_window", "Discord"),
+            ],
+        )
+        self.assertEqual(
+            [step.status for step in report.steps],
+            [
+                ROUTINE_STEP_DONE,
+                ROUTINE_STEP_DONE,
+                ROUTINE_STEP_DONE,
+                ROUTINE_STEP_DONE,
+                ROUTINE_STEP_FAILED,
+            ],
+        )
+
+    def test_gaming_continuation_stops_when_steam_process_missing(self):
+        routine = get_routine_definition("gaming mode")
+        calls = []
+
+        def launch_app(name: str) -> LaunchResult:
+            calls.append(("launch", name))
+            return LaunchResult(
+                success=True,
+                display_name=name,
+                message=f"Launched {name}",
+            )
+
+        def wait_for_window(name: str) -> AppWindowWaitResult:
+            calls.append(("wait_window", name))
+            return AppWindowWaitResult(
+                success=True,
+                display_name=name,
+                window_count=1,
+                message=f"{name} is open with 1 verified window, sir.",
+            )
+
+        def wait_for_process(name: str) -> AppProcessWaitResult:
+            calls.append(("wait_process", name))
+            return AppProcessWaitResult(
+                success=False,
+                display_name=name,
+                process_count=0,
+                message=f"{name} did not start a verified process.",
+            )
+
+        report = continue_local_routine_after_confirmation(
+            routine,
+            confirmed_action_message=(
+                "NitroSense gaming profile applied and verified."
+            ),
+            launch_app=launch_app,
+            wait_for_window=wait_for_window,
+            wait_for_process=wait_for_process,
+            set_brightness=lambda level: calls.append(
+                ("brightness", level)
+            ) or BrightnessState(level=level),
+            set_volume=lambda level: calls.append(
+                ("volume", level)
+            ) or VolumeState(level=level, muted=False),
+            routine_settings=RoutineSettings(
+                brightness=100,
+                volume=50,
+            ),
+        )
+
+        self.assertTrue(report.has_failed_steps)
+        self.assertEqual(
+            calls,
+            [
+                ("launch", "Steam"),
+                ("wait_process", "Steam"),
+            ],
+        )
+        self.assertEqual(
+            [step.status for step in report.steps],
+            [
+                ROUTINE_STEP_DONE,
+                ROUTINE_STEP_DONE,
+                ROUTINE_STEP_FAILED,
+            ],
+        )
+
+    def test_gaming_continuation_stops_when_discord_focus_fails(self):
+        routine = get_routine_definition("gaming mode")
+        calls = []
+
+        def launch_app(name: str) -> LaunchResult:
+            calls.append(("launch", name))
+            return LaunchResult(
+                success=True,
+                display_name=name,
+                message=f"Launched {name}",
+            )
+
+        def wait_for_window(name: str) -> AppWindowWaitResult:
+            calls.append(("wait_window", name))
+            return AppWindowWaitResult(
+                success=True,
+                display_name=name,
+                window_count=1,
+                message=f"{name} is open with 1 verified window, sir.",
+            )
+
+        def wait_for_process(name: str) -> AppProcessWaitResult:
+            calls.append(("wait_process", name))
+            return AppProcessWaitResult(
+                success=True,
+                display_name=name,
+                process_count=1,
+                message=f"{name} is running with 1 verified process, sir.",
+            )
+
+        def bring_window_to_front(name: str) -> AppWindowFocusResult:
+            calls.append(("focus_window", name))
+            return AppWindowFocusResult(
+                success=False,
+                display_name=name,
+                message=(
+                    f"Windows would not bring {name} to the "
+                    "foreground, sir."
+                ),
+            )
+
+        report = continue_local_routine_after_confirmation(
+            routine,
+            confirmed_action_message=(
+                "NitroSense gaming profile applied and verified."
+            ),
+            launch_app=launch_app,
+            wait_for_window=wait_for_window,
+            wait_for_process=wait_for_process,
+            bring_window_to_front=bring_window_to_front,
+            set_brightness=lambda level: calls.append(
+                ("brightness", level)
+            ) or BrightnessState(level=level),
+            set_volume=lambda level: calls.append(
+                ("volume", level)
+            ) or VolumeState(level=level, muted=False),
+            routine_settings=RoutineSettings(
+                brightness=100,
+                volume=50,
+            ),
+        )
+
+        self.assertTrue(report.has_failed_steps)
+        self.assertEqual(
+            calls,
+            [
+                ("launch", "Steam"),
+                ("wait_process", "Steam"),
+                ("launch", "Discord"),
+                ("wait_window", "Discord"),
+                ("focus_window", "Discord"),
+            ],
+        )
+        self.assertEqual(
+            [step.status for step in report.steps],
+            [
+                ROUTINE_STEP_DONE,
+                ROUTINE_STEP_DONE,
+                ROUTINE_STEP_DONE,
+                ROUTINE_STEP_DONE,
+                ROUTINE_STEP_DONE,
+                ROUTINE_STEP_FAILED,
+            ],
         )
 
     def test_runner_reports_launch_failures_without_stopping(self):

@@ -9,6 +9,18 @@ from skills.app_launcher import (
     LaunchResult,
     launch_catalog_app,
 )
+from skills.app_process_wait import (
+    AppProcessWaitResult,
+    wait_for_app_process,
+)
+from skills.app_window_focus import (
+    AppWindowFocusResult,
+    focus_app_window,
+)
+from skills.app_window_wait import (
+    AppWindowWaitResult,
+    wait_for_app_window,
+)
 from skills.local_reminders import (
     LocalReminder,
     LocalRemindersError,
@@ -38,6 +50,11 @@ from skills.system_controls import (
 
 ACTION_PREVIEW_ONLY: Final = "preview_only"
 ACTION_LAUNCH_APP: Final = "launch_app"
+ACTION_WAIT_FOR_APP_WINDOW: Final = "wait_for_app_window"
+ACTION_WAIT_FOR_APP_PROCESS: Final = "wait_for_app_process"
+ACTION_BRING_APP_WINDOW_TO_FRONT: Final = (
+    "bring_app_window_to_front"
+)
 ACTION_APPROVED_URL_GROUP: Final = "approved_url_group"
 ACTION_SET_BRIGHTNESS: Final = "set_brightness"
 ACTION_SET_VOLUME: Final = "set_volume"
@@ -229,15 +246,33 @@ LOCAL_ROUTINES: Final[tuple[LocalRoutine, ...]] = (
             ),
             RoutineAction(
                 label="Launch app",
+                detail="Steam",
+                action_type=ACTION_LAUNCH_APP,
+                argument="Steam",
+            ),
+            RoutineAction(
+                label="Verify app process",
+                detail="Steam",
+                action_type=ACTION_WAIT_FOR_APP_PROCESS,
+                argument="Steam",
+            ),
+            RoutineAction(
+                label="Launch app",
                 detail="Discord",
                 action_type=ACTION_LAUNCH_APP,
                 argument="Discord",
             ),
             RoutineAction(
-                label="Launch app",
-                detail="Steam",
-                action_type=ACTION_LAUNCH_APP,
-                argument="Steam",
+                label="Verify app window",
+                detail="Discord",
+                action_type=ACTION_WAIT_FOR_APP_WINDOW,
+                argument="Discord",
+            ),
+            RoutineAction(
+                label="Bring app window to foreground",
+                detail="Discord",
+                action_type=ACTION_BRING_APP_WINDOW_TO_FRONT,
+                argument="Discord",
             ),
             RoutineAction(
                 label="Set brightness",
@@ -443,6 +478,58 @@ def _run_launch_action(
     )
 
 
+def _run_wait_for_app_window_action(
+    action: RoutineAction,
+    *,
+    wait_for_window: Callable[[str], AppWindowWaitResult],
+) -> RoutineStepResult:
+    """Run one exact app-window verification action."""
+    result = wait_for_window(action.argument or action.detail)
+
+    status = (
+        ROUTINE_STEP_DONE
+        if result.success
+        else ROUTINE_STEP_FAILED
+    )
+
+    return RoutineStepResult(
+        action=action,
+        status=status,
+        message=result.message,
+    )
+
+def _run_wait_for_app_process_action(
+    action: RoutineAction,
+    *,
+    wait_for_process: Callable[[str], AppProcessWaitResult],
+) -> RoutineStepResult:
+    """Run one exact app-process verification action."""
+    result = wait_for_process(action.argument or action.detail)
+
+    status = ROUTINE_STEP_DONE if result.success else ROUTINE_STEP_FAILED
+
+    return RoutineStepResult(
+        action=action,
+        status=status,
+        message=result.message,
+    )
+
+def _run_bring_app_window_to_front_action(
+    action: RoutineAction,
+    *,
+    bring_window_to_front: Callable[[str], AppWindowFocusResult],
+) -> RoutineStepResult:
+    """Bring one exact app window to the foreground."""
+    result = bring_window_to_front(action.argument or action.detail)
+
+    status = ROUTINE_STEP_DONE if result.success else ROUTINE_STEP_FAILED
+
+    return RoutineStepResult(
+        action=action,
+        status=status,
+        message=result.message,
+    )
+
 def _run_brightness_action(
     action: RoutineAction,
     *,
@@ -544,6 +631,9 @@ def _run_routine_action(
     action: RoutineAction,
     *,
     launch_app: Callable[[str], LaunchResult],
+    wait_for_window: Callable[[str], AppWindowWaitResult],
+    wait_for_process: Callable[[str], AppProcessWaitResult],
+    bring_window_to_front: Callable[[str], AppWindowFocusResult],
     set_brightness: Callable[[int], BrightnessState],
     set_volume: Callable[[int], VolumeState],
     schedule_timer_after: Callable[
@@ -560,6 +650,24 @@ def _run_routine_action(
         return _run_launch_action(
             action,
             launch_app=launch_app,
+        )
+
+    if action.action_type == ACTION_WAIT_FOR_APP_WINDOW:
+        return _run_wait_for_app_window_action(
+            action,
+            wait_for_window=wait_for_window,
+        )
+
+    if action.action_type == ACTION_WAIT_FOR_APP_PROCESS:
+        return _run_wait_for_app_process_action(
+            action,
+            wait_for_process=wait_for_process,
+        )
+
+    if action.action_type == ACTION_BRING_APP_WINDOW_TO_FRONT:
+        return _run_bring_app_window_to_front_action(
+            action,
+            bring_window_to_front=bring_window_to_front,
         )
 
     if action.action_type == ACTION_APPROVED_URL_GROUP:
@@ -621,6 +729,15 @@ def run_local_routine(
     routine: LocalRoutine,
     *,
     launch_app: Callable[[str], LaunchResult] = launch_catalog_app,
+    wait_for_window: Callable[[str], AppWindowWaitResult] = (
+        wait_for_app_window
+    ),
+    wait_for_process: Callable[[str], AppProcessWaitResult] = (
+        wait_for_app_process
+    ),
+    bring_window_to_front: Callable[[str], AppWindowFocusResult] = (
+        focus_app_window
+    ),
     set_brightness: Callable[[int], BrightnessState] = (
         set_primary_brightness
     ),
@@ -651,6 +768,9 @@ def run_local_routine(
             step_result = _run_routine_action(
                 effective_action,
                 launch_app=launch_app,
+                wait_for_window=wait_for_window,
+                wait_for_process=wait_for_process,
+                bring_window_to_front=bring_window_to_front,
                 set_brightness=set_brightness,
                 set_volume=set_volume,
                 schedule_timer_after=schedule_timer_after,
@@ -676,7 +796,19 @@ def run_local_routine(
             )
 
         step_results.append(step_result)
+
         if step_result.status == ROUTINE_STEP_NEEDS_CONFIRMATION:
+            break
+
+        if (
+            step_result.status == ROUTINE_STEP_FAILED
+            and effective_action.action_type
+            in {
+                ACTION_WAIT_FOR_APP_WINDOW,
+                ACTION_WAIT_FOR_APP_PROCESS,
+                ACTION_BRING_APP_WINDOW_TO_FRONT,
+            }
+        ):
             break
 
     return LocalRoutineRunReport(
@@ -700,6 +832,15 @@ def continue_local_routine_after_confirmation(
     *,
     confirmed_action_message: str,
     launch_app: Callable[[str], LaunchResult] = launch_catalog_app,
+    wait_for_window: Callable[[str], AppWindowWaitResult] = (
+        wait_for_app_window
+    ),
+    wait_for_process: Callable[[str], AppProcessWaitResult] = (
+        wait_for_app_process
+    ),
+    bring_window_to_front: Callable[[str], AppWindowFocusResult] = (
+        focus_app_window
+    ),
     set_brightness: Callable[[int], BrightnessState] = (
         set_primary_brightness
     ),
@@ -738,6 +879,9 @@ def continue_local_routine_after_confirmation(
             step_result = _run_routine_action(
                 effective_action,
                 launch_app=launch_app,
+                wait_for_window=wait_for_window,
+                wait_for_process=wait_for_process,
+                bring_window_to_front=bring_window_to_front,
                 set_brightness=set_brightness,
                 set_volume=set_volume,
                 schedule_timer_after=schedule_timer_after,
@@ -763,6 +907,17 @@ def continue_local_routine_after_confirmation(
         step_results.append(step_result)
 
         if step_result.status == ROUTINE_STEP_NEEDS_CONFIRMATION:
+            break
+
+        if (
+            step_result.status == ROUTINE_STEP_FAILED
+            and effective_action.action_type
+            in {
+                ACTION_WAIT_FOR_APP_WINDOW,
+                ACTION_WAIT_FOR_APP_PROCESS,
+                ACTION_BRING_APP_WINDOW_TO_FRONT,
+            }
+        ):
             break
 
     return LocalRoutineRunReport(
