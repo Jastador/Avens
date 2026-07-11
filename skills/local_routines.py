@@ -17,6 +17,11 @@ from skills.app_window_focus import (
     AppWindowFocusResult,
     focus_app_window,
 )
+from skills.discord_voice_config import (
+    DiscordVoiceConfigError,
+    DiscordVoiceTarget,
+    get_discord_voice_target,
+)
 from skills.app_window_wait import (
     AppWindowWaitResult,
     wait_for_app_window,
@@ -54,6 +59,9 @@ ACTION_WAIT_FOR_APP_WINDOW: Final = "wait_for_app_window"
 ACTION_WAIT_FOR_APP_PROCESS: Final = "wait_for_app_process"
 ACTION_BRING_APP_WINDOW_TO_FRONT: Final = (
     "bring_app_window_to_front"
+)
+ACTION_RESOLVE_DISCORD_VOICE_TARGET: Final = (
+    "resolve_discord_voice_target"
 )
 ACTION_APPROVED_URL_GROUP: Final = "approved_url_group"
 ACTION_SET_BRIGHTNESS: Final = "set_brightness"
@@ -275,6 +283,11 @@ LOCAL_ROUTINES: Final[tuple[LocalRoutine, ...]] = (
                 argument="Discord",
             ),
             RoutineAction(
+                label="Resolve Discord voice target",
+                detail="configured target",
+                action_type=ACTION_RESOLVE_DISCORD_VOICE_TARGET,
+            ),
+            RoutineAction(
                 label="Set brightness",
                 detail="100%",
                 action_type=ACTION_SET_BRIGHTNESS,
@@ -455,6 +468,16 @@ def _apply_routine_settings(
             argument=str(settings.volume),
         )
 
+    if (
+        action.action_type == ACTION_RESOLVE_DISCORD_VOICE_TARGET
+        and settings.discord_voice_target_alias is not None
+    ):
+        return replace(
+            action,
+            detail=settings.discord_voice_target_alias,
+            argument=settings.discord_voice_target_alias,
+        )
+
     return action
 
 def _run_launch_action(
@@ -528,6 +551,47 @@ def _run_bring_app_window_to_front_action(
         action=action,
         status=status,
         message=result.message,
+    )
+
+def _run_resolve_discord_voice_target_action(
+    action: RoutineAction,
+    *,
+    resolve_discord_voice_target: Callable[
+        [str],
+        DiscordVoiceTarget,
+    ],
+) -> RoutineStepResult:
+    """Resolve one configured Discord voice target without joining."""
+    target_alias = action.argument.strip()
+
+    if not target_alias:
+        return RoutineStepResult(
+            action=action,
+            status=ROUTINE_STEP_SKIPPED,
+            message=(
+                "Discord voice target is not configured for this "
+                "routine, sir."
+            ),
+        )
+
+    try:
+        target = resolve_discord_voice_target(target_alias)
+    except DiscordVoiceConfigError as error:
+        return RoutineStepResult(
+            action=action,
+            status=ROUTINE_STEP_FAILED,
+            message=str(error),
+        )
+
+    return RoutineStepResult(
+        action=action,
+        status=ROUTINE_STEP_DONE,
+        message=(
+            "Discord voice target resolved: "
+            f"server '{target.server_name}', "
+            f"channel '{target.channel_name}'. "
+            "UI joining is not implemented yet, sir."
+        ),
     )
 
 def _run_brightness_action(
@@ -634,6 +698,10 @@ def _run_routine_action(
     wait_for_window: Callable[[str], AppWindowWaitResult],
     wait_for_process: Callable[[str], AppProcessWaitResult],
     bring_window_to_front: Callable[[str], AppWindowFocusResult],
+    resolve_discord_voice_target: Callable[
+        [str],
+        DiscordVoiceTarget,
+    ],
     set_brightness: Callable[[int], BrightnessState],
     set_volume: Callable[[int], VolumeState],
     schedule_timer_after: Callable[
@@ -668,6 +736,12 @@ def _run_routine_action(
         return _run_bring_app_window_to_front_action(
             action,
             bring_window_to_front=bring_window_to_front,
+        )
+
+    if action.action_type == ACTION_RESOLVE_DISCORD_VOICE_TARGET:
+        return _run_resolve_discord_voice_target_action(
+            action,
+            resolve_discord_voice_target=resolve_discord_voice_target,
         )
 
     if action.action_type == ACTION_APPROVED_URL_GROUP:
@@ -738,6 +812,10 @@ def run_local_routine(
     bring_window_to_front: Callable[[str], AppWindowFocusResult] = (
         focus_app_window
     ),
+    resolve_discord_voice_target: Callable[
+        [str],
+        DiscordVoiceTarget,
+    ] = get_discord_voice_target,
     set_brightness: Callable[[int], BrightnessState] = (
         set_primary_brightness
     ),
@@ -771,6 +849,9 @@ def run_local_routine(
                 wait_for_window=wait_for_window,
                 wait_for_process=wait_for_process,
                 bring_window_to_front=bring_window_to_front,
+                resolve_discord_voice_target=(
+                    resolve_discord_voice_target
+                ),
                 set_brightness=set_brightness,
                 set_volume=set_volume,
                 schedule_timer_after=schedule_timer_after,
@@ -807,6 +888,7 @@ def run_local_routine(
                 ACTION_WAIT_FOR_APP_WINDOW,
                 ACTION_WAIT_FOR_APP_PROCESS,
                 ACTION_BRING_APP_WINDOW_TO_FRONT,
+                ACTION_RESOLVE_DISCORD_VOICE_TARGET,
             }
         ):
             break
@@ -841,6 +923,10 @@ def continue_local_routine_after_confirmation(
     bring_window_to_front: Callable[[str], AppWindowFocusResult] = (
         focus_app_window
     ),
+    resolve_discord_voice_target: Callable[
+        [str],
+        DiscordVoiceTarget,
+    ] = get_discord_voice_target,
     set_brightness: Callable[[int], BrightnessState] = (
         set_primary_brightness
     ),
@@ -882,6 +968,9 @@ def continue_local_routine_after_confirmation(
                 wait_for_window=wait_for_window,
                 wait_for_process=wait_for_process,
                 bring_window_to_front=bring_window_to_front,
+                resolve_discord_voice_target=(
+                    resolve_discord_voice_target
+                ),
                 set_brightness=set_brightness,
                 set_volume=set_volume,
                 schedule_timer_after=schedule_timer_after,
@@ -916,6 +1005,7 @@ def continue_local_routine_after_confirmation(
                 ACTION_WAIT_FOR_APP_WINDOW,
                 ACTION_WAIT_FOR_APP_PROCESS,
                 ACTION_BRING_APP_WINDOW_TO_FRONT,
+                ACTION_RESOLVE_DISCORD_VOICE_TARGET,
             }
         ):
             break
