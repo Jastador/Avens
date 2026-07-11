@@ -176,13 +176,18 @@ def activate_window(hwnd: int) -> None:
     if not win32gui.IsWindow(hwnd):
         raise RuntimeError("NitroSense window no longer exists.")
 
-    if win32gui.IsIconic(hwnd):
-        win32gui.ShowWindow(hwnd, win32con.SW_RESTORE)
-    else:
-        win32gui.ShowWindow(hwnd, win32con.SW_SHOW)
+    try:
+        if win32gui.IsIconic(hwnd):
+            win32gui.ShowWindow(hwnd, win32con.SW_RESTORE)
+        else:
+            win32gui.ShowWindow(hwnd, win32con.SW_SHOW)
 
-    win32gui.BringWindowToTop(hwnd)
-    win32gui.SetForegroundWindow(hwnd)
+        win32gui.BringWindowToTop(hwnd)
+        win32gui.SetForegroundWindow(hwnd)
+    except Exception as error:
+        raise RuntimeError(
+            f"NitroSense could not be brought to the foreground: {error}"
+        ) from error
 
     time.sleep(0.35)
 
