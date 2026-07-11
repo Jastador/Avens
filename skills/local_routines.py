@@ -604,8 +604,9 @@ def _run_routine_action(
             action=action,
             status=ROUTINE_STEP_NEEDS_CONFIRMATION,
             message=(
-                "NitroSense gaming profile confirmation requested. "
-                'Say "Confirm NitroSense gaming profile" to apply it.'
+                "Gaming Mode confirmation requested. "
+                'Say "Confirm gaming mode" to apply NitroSense '
+                "and continue."
             ),
         )
 
@@ -683,6 +684,91 @@ def run_local_routine(
         steps=tuple(step_results),
     )
 
+def _confirmation_action_index(routine: LocalRoutine) -> int:
+    """Return the first confirmation action index for a routine."""
+    for index, action in enumerate(routine.actions):
+        if action.action_type == ACTION_NITROSENSE_CONFIRMATION:
+            return index
+
+    raise LocalRoutineError(
+        f"{routine.display_name} has no confirmation step to continue from."
+    )
+
+
+def continue_local_routine_after_confirmation(
+    routine: LocalRoutine,
+    *,
+    confirmed_action_message: str,
+    launch_app: Callable[[str], LaunchResult] = launch_catalog_app,
+    set_brightness: Callable[[int], BrightnessState] = (
+        set_primary_brightness
+    ),
+    set_volume: Callable[[int], VolumeState] = set_master_volume,
+    schedule_timer_after: Callable[
+        ...,
+        ReminderSchedule,
+    ] = schedule_after_duration,
+    save_timer: Callable[..., LocalReminder] = save_reminder,
+    open_night_light: Callable[[], None] = open_night_light_settings,
+    open_url_group: Callable[[str], UrlGroupOpenReport] = (
+        open_approved_url_group
+    ),
+    routine_settings: RoutineSettings | None = None,
+) -> LocalRoutineRunReport:
+    """Continue one routine after its confirmation action is completed."""
+    confirmation_index = _confirmation_action_index(routine)
+    confirmation_action = routine.actions[confirmation_index]
+    settings = routine_settings or RoutineSettings()
+
+    step_results = [
+        RoutineStepResult(
+            action=confirmation_action,
+            status=ROUTINE_STEP_DONE,
+            message=confirmed_action_message,
+        )
+    ]
+
+    for action in routine.actions[confirmation_index + 1:]:
+        effective_action = _apply_routine_settings(
+            action,
+            settings,
+        )
+
+        try:
+            step_result = _run_routine_action(
+                effective_action,
+                launch_app=launch_app,
+                set_brightness=set_brightness,
+                set_volume=set_volume,
+                schedule_timer_after=schedule_timer_after,
+                save_timer=save_timer,
+                open_night_light=open_night_light,
+                open_url_group=open_url_group,
+                begin_nitrosense_confirmation=None,
+            )
+        except (
+            LocalRemindersError,
+            LocalRoutineUrlError,
+            ReminderScheduleError,
+            SystemControlError,
+            ValueError,
+            RuntimeError,
+        ) as error:
+            step_result = RoutineStepResult(
+                action=effective_action,
+                status=ROUTINE_STEP_FAILED,
+                message=str(error),
+            )
+
+        step_results.append(step_result)
+
+        if step_result.status == ROUTINE_STEP_NEEDS_CONFIRMATION:
+            break
+
+    return LocalRoutineRunReport(
+        routine=routine,
+        steps=tuple(step_results),
+    )
 
 def format_routine_run_report(
     report: LocalRoutineRunReport,
@@ -713,8 +799,8 @@ def format_routine_run_report(
             (
                 "",
                 "Routine paused before remaining actions.",
-                'Follow-up required: say "Confirm NitroSense gaming '
-                'profile" to apply NitroSense changes.',
+                'Follow-up required: say "Confirm gaming mode" '
+                "to continue.",
             )
         )
     else:

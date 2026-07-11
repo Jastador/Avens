@@ -11,6 +11,8 @@ from skills.local_routines import (
     RoutineStepResult,
     get_routine_definition,
 )
+from types import SimpleNamespace
+from skills.gaming_mode_confirmation import GamingModeConfirmationStore
 from skills.router import route_local_skill
 from skills.local_routine_settings import (
     LocalRoutineSettingsError,
@@ -167,10 +169,99 @@ class LocalRoutinesRouterTests(unittest.TestCase):
         self.assertEqual(result.skill_name, "start_local_routine")
         self.assertEqual(
             result.message,
-            "I started Gaming Mode and paused before the remaining "
-            "steps. NitroSense still needs confirmation, sir.",
+            "I opened NitroSense and paused Gaming Mode. "
+            "Say Confirm gaming mode to continue, sir.",
         )
         self.assertEqual(output, ["gaming report"])
+
+    def test_confirms_gaming_mode_and_continues_sequence(self):
+        output = []
+        store = GamingModeConfirmationStore(clock=lambda: 100.0)
+        store.begin()
+        continuation_calls = []
+
+        def continue_routine(routine, **kwargs):
+            continuation_calls.append(
+                (
+                    routine.routine_id,
+                    kwargs["confirmed_action_message"],
+                    kwargs["routine_settings"],
+                )
+            )
+            return _make_report(
+                routine.display_name,
+                status=ROUTINE_STEP_DONE,
+            )
+
+        result = route_local_skill(
+            "Confirm gaming mode",
+            gaming_mode_confirmations=store,
+            apply_nitrosense_profile=lambda: SimpleNamespace(
+                performance_changed=True,
+                fan_max_changed=True,
+                performance_selected=True,
+                fan_max_selected=True,
+            ),
+            continue_local_routine_plan=continue_routine,
+            get_local_routine_settings=lambda _: RoutineSettings(
+                brightness=100,
+                volume=50,
+            ),
+            format_local_routine_run_report=lambda _: (
+                "continuation report"
+            ),
+            console_output=output.append,
+        )
+
+        self.assertEqual(result.skill_name, "confirm_gaming_mode")
+        self.assertEqual(
+            result.message,
+            "Gaming Mode confirmed and continued, sir.",
+        )
+        self.assertEqual(
+            continuation_calls,
+            [
+                (
+                    "gaming",
+                    "NitroSense gaming profile applied and verified.",
+                    RoutineSettings(brightness=100, volume=50),
+                )
+            ],
+        )
+        self.assertTrue(
+            output[0].startswith("NitroSense gaming profile applied")
+        )
+        self.assertEqual(output[1], "continuation report")
+
+    def test_confirm_gaming_mode_without_pending_request_is_safe(self):
+        result = route_local_skill(
+            "Confirm gaming mode",
+            gaming_mode_confirmations=GamingModeConfirmationStore(
+                clock=lambda: 100.0
+            ),
+        )
+
+        self.assertEqual(result.skill_name, "confirm_gaming_mode")
+        self.assertEqual(
+            result.message,
+            "There is no pending Gaming Mode request to confirm, sir.",
+        )
+
+    def test_cancels_pending_gaming_mode(self):
+        store = GamingModeConfirmationStore(clock=lambda: 100.0)
+        store.begin()
+
+        result = route_local_skill(
+            "Cancel gaming mode",
+            gaming_mode_confirmations=store,
+        )
+
+        self.assertEqual(result.skill_name, "cancel_gaming_mode")
+        self.assertEqual(
+            result.message,
+            "Pending Gaming Mode request cancelled, sir.",
+        )
+        self.assertEqual(store.confirm().status, "none")
 
     def test_start_routine_reports_failures(self):
         output = []

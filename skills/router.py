@@ -109,6 +109,11 @@ from skills.nitrosense_confirmation import (
     nitrosense_gaming_profile_confirmation_store,
 )
 
+from skills.gaming_mode_confirmation import (
+    GamingModeConfirmationStore,
+    gaming_mode_confirmation_store,
+)
+
 from tools.nitrosense_gaming_profile import (
     NitroSenseControlError,
     NitroSenseGamingProfileReport,
@@ -118,12 +123,13 @@ from tools.nitrosense_gaming_profile import (
 from skills.local_routines import (
     LocalRoutine,
     LocalRoutineError,
+    LocalRoutineRunReport,
+    continue_local_routine_after_confirmation,
     format_routine_list,
     format_routine_preview,
+    format_routine_run_report,
     get_routine_definition,
     list_local_routines,
-    LocalRoutineRunReport,
-    format_routine_run_report,
     run_local_routine,
 )
 
@@ -388,6 +394,21 @@ START_LOCAL_ROUTINE_SKILL = LocalSkillDefinition(
     allowed_arguments=("routine_name",),
     offline=True,
     requires_confirmation=False,
+)
+
+
+CONFIRM_GAMING_MODE_SKILL = LocalSkillDefinition(
+    name="confirm_gaming_mode",
+    allowed_arguments=(),
+    offline=True,
+    requires_confirmation=True,
+)
+
+CANCEL_GAMING_MODE_SKILL = LocalSkillDefinition(
+    name="cancel_gaming_mode",
+    allowed_arguments=(),
+    offline=True,
+    requires_confirmation=True,
 )
 
 APP_LAUNCH_PATTERN = re.compile(
@@ -941,6 +962,34 @@ NITROSENSE_GAMING_PROFILE_PATTERN = re.compile(
     re.IGNORECASE,
 )
 
+CONFIRM_GAMING_MODE_PATTERN = re.compile(
+    r"^\s*"
+    r"(?:(?:and|or|then)\s+)?"
+    r"(?:(?:can|could|would|will)\s+you\s+)?"
+    r"(?:please\s+)?"
+    r"confirm(?:\s+|[,:;.!?]+\s*)"
+    r"(?:the\s+)?"
+    r"(?:gaming|game)"
+    r"(?:\s+mode)?"
+    r"(?:\s+please)?"
+    r"\s*[.!?]*\s*$",
+    re.IGNORECASE,
+)
+
+CANCEL_GAMING_MODE_PATTERN = re.compile(
+    r"^\s*"
+    r"(?:(?:and|or|then)\s+)?"
+    r"(?:(?:can|could|would|will)\s+you\s+)?"
+    r"(?:please\s+)?"
+    r"(?:cancel|stop)(?:\s+|[,:;.!?]+\s*)"
+    r"(?:the\s+)?"
+    r"(?:gaming|game)"
+    r"(?:\s+mode)?"
+    r"(?:\s+please)?"
+    r"\s*[.!?]*\s*$",
+    re.IGNORECASE,
+)
+
 CONFIRM_NITROSENSE_GAMING_PROFILE_PATTERN = re.compile(
     r"^\s*"
     r"(?:(?:and|or|then)\s+)?"
@@ -1022,6 +1071,8 @@ LOCAL_SKILL_REQUEST_PATTERNS = (
     LOCAL_ROUTINE_START_PATTERN,
     LOCAL_ROUTINE_LIST_PATTERN,
     LOCAL_ROUTINE_PREVIEW_PATTERN,
+    CONFIRM_GAMING_MODE_PATTERN,
+    CANCEL_GAMING_MODE_PATTERN,
     NITROSENSE_GAMING_PROFILE_PATTERN,
     CONFIRM_NITROSENSE_GAMING_PROFILE_PATTERN,
     CANCEL_NITROSENSE_GAMING_PROFILE_PATTERN,
@@ -1181,6 +1232,9 @@ def route_local_skill(
     nitrosense_gaming_profile_confirmations: (
         NitroSenseGamingProfileConfirmationStore
     ) = nitrosense_gaming_profile_confirmation_store,
+    gaming_mode_confirmations: GamingModeConfirmationStore = (
+        gaming_mode_confirmation_store
+    ),
     apply_nitrosense_profile: Callable[
         [],
         NitroSenseGamingProfileReport,
@@ -1226,6 +1280,10 @@ def route_local_skill(
         ...,
         LocalRoutineRunReport,
     ] = run_local_routine,
+    continue_local_routine_plan: Callable[
+        ...,
+        LocalRoutineRunReport,
+    ] = continue_local_routine_after_confirmation,
     format_local_routine_run_report: Callable[
         [LocalRoutineRunReport],
         str,
@@ -1353,13 +1411,17 @@ def route_local_skill(
                 ),
             )
 
+        begin_confirmation = (
+            gaming_mode_confirmations.begin
+            if routine.routine_id == "gaming"
+            else nitrosense_gaming_profile_confirmations.begin
+        )
+
         try:
             report = run_local_routine_plan(
                 routine,
                 routine_settings=routine_settings,
-                begin_nitrosense_confirmation=(
-                    nitrosense_gaming_profile_confirmations.begin
-                ),
+                begin_nitrosense_confirmation=begin_confirmation,
             )
         except LocalRoutineError as error:
             console_output(f"Local routine error: {error}")
@@ -1384,11 +1446,17 @@ def route_local_skill(
                 f"I ran {routine.display_name} with some failures, sir."
             )
         elif report.requires_followup_confirmation:
-            message = (
-                f"I started {routine.display_name} and paused before "
-                "the remaining steps. NitroSense still needs "
-                "confirmation, sir."
-            )
+            if routine.routine_id == "gaming":
+                message = (
+                    "I opened NitroSense and paused Gaming Mode. "
+                    "Say Confirm gaming mode to continue, sir."
+                )
+            else:
+                message = (
+                    f"I started {routine.display_name} and paused before "
+                    "the remaining steps. NitroSense still needs "
+                    "confirmation, sir."
+                )
         else:
             message = f"I started {routine.display_name}, sir."
 
@@ -1462,6 +1530,130 @@ def route_local_skill(
                 SHOW_LOCAL_ROUTINE_SKILL.requires_confirmation
             ),
         )
+    confirm_gaming_mode_match = CONFIRM_GAMING_MODE_PATTERN.match(
+        user_input
+    )
+
+    if confirm_gaming_mode_match is not None:
+        decision = gaming_mode_confirmations.confirm()
+
+        if decision.status == "none":
+            return SkillResult(
+                handled=True,
+                skill_name=CONFIRM_GAMING_MODE_SKILL.name,
+                message=(
+                    "There is no pending Gaming Mode request to "
+                    "confirm, sir."
+                ),
+                offline=CONFIRM_GAMING_MODE_SKILL.offline,
+                requires_confirmation=(
+                    CONFIRM_GAMING_MODE_SKILL.requires_confirmation
+                ),
+            )
+
+        if decision.status == "expired":
+            return SkillResult(
+                handled=True,
+                skill_name=CONFIRM_GAMING_MODE_SKILL.name,
+                message=(
+                    "That Gaming Mode confirmation expired. "
+                    "Start Gaming Mode again, sir."
+                ),
+                offline=CONFIRM_GAMING_MODE_SKILL.offline,
+                requires_confirmation=(
+                    CONFIRM_GAMING_MODE_SKILL.requires_confirmation
+                ),
+            )
+
+        try:
+            routine = get_local_routine("gaming mode")
+            routine_settings = get_local_routine_settings(
+                routine.routine_id
+            )
+        except (LocalRoutineError, LocalRoutineSettingsError) as error:
+            console_output(f"Gaming Mode continuation error: {error}")
+
+            return SkillResult(
+                handled=True,
+                skill_name=CONFIRM_GAMING_MODE_SKILL.name,
+                message=(
+                    "I could not continue Gaming Mode safely, sir."
+                ),
+                offline=CONFIRM_GAMING_MODE_SKILL.offline,
+                requires_confirmation=(
+                    CONFIRM_GAMING_MODE_SKILL.requires_confirmation
+                ),
+            )
+
+        try:
+            nitrosense_report = apply_nitrosense_profile()
+        except (NitroSenseControlError, RuntimeError) as error:
+            console_output(f"NitroSense control error: {error}")
+
+            return SkillResult(
+                handled=True,
+                skill_name=CONFIRM_GAMING_MODE_SKILL.name,
+                message=(
+                    "I could not safely apply the Gaming Mode "
+                    "NitroSense step, sir."
+                ),
+                offline=CONFIRM_GAMING_MODE_SKILL.offline,
+                requires_confirmation=(
+                    CONFIRM_GAMING_MODE_SKILL.requires_confirmation
+                ),
+            )
+
+        console_output(
+            _format_nitrosense_gaming_profile_report(
+                nitrosense_report
+            )
+        )
+
+        try:
+            continuation_report = continue_local_routine_plan(
+                routine,
+                routine_settings=routine_settings,
+                confirmed_action_message=(
+                    "NitroSense gaming profile applied and verified."
+                ),
+            )
+        except LocalRoutineError as error:
+            console_output(f"Gaming Mode continuation error: {error}")
+
+            return SkillResult(
+                handled=True,
+                skill_name=CONFIRM_GAMING_MODE_SKILL.name,
+                message=(
+                    "I applied NitroSense but could not continue "
+                    "Gaming Mode safely, sir."
+                ),
+                offline=CONFIRM_GAMING_MODE_SKILL.offline,
+                requires_confirmation=(
+                    CONFIRM_GAMING_MODE_SKILL.requires_confirmation
+                ),
+            )
+
+        console_output(
+            format_local_routine_run_report(continuation_report)
+        )
+
+        if continuation_report.has_failed_steps:
+            message = (
+                "Gaming Mode confirmed, but some remaining steps "
+                "failed, sir."
+            )
+        else:
+            message = "Gaming Mode confirmed and continued, sir."
+
+        return SkillResult(
+            handled=True,
+            skill_name=CONFIRM_GAMING_MODE_SKILL.name,
+            message=message,
+            offline=CONFIRM_GAMING_MODE_SKILL.offline,
+            requires_confirmation=(
+                CONFIRM_GAMING_MODE_SKILL.requires_confirmation
+            ),
+        )
     confirm_nitrosense_match = (
         CONFIRM_NITROSENSE_GAMING_PROFILE_PATTERN.match(user_input)
     )
@@ -1532,6 +1724,30 @@ def route_local_skill(
             requires_confirmation=(
                 NITROSENSE_GAMING_PROFILE_SKILL
                 .requires_confirmation
+            ),
+        )
+
+    cancel_gaming_mode_match = CANCEL_GAMING_MODE_PATTERN.match(
+        user_input
+    )
+
+    if cancel_gaming_mode_match is not None:
+        cancelled_request = gaming_mode_confirmations.cancel()
+
+        if cancelled_request is None:
+            message = (
+                "There is no pending Gaming Mode request to cancel, sir."
+            )
+        else:
+            message = "Pending Gaming Mode request cancelled, sir."
+
+        return SkillResult(
+            handled=True,
+            skill_name=CANCEL_GAMING_MODE_SKILL.name,
+            message=message,
+            offline=CANCEL_GAMING_MODE_SKILL.offline,
+            requires_confirmation=(
+                CANCEL_GAMING_MODE_SKILL.requires_confirmation
             ),
         )
 
