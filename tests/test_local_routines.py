@@ -18,6 +18,7 @@ from skills.local_routines import (
     get_routine_definition,
     list_local_routines,
     run_local_routine,
+    continue_local_routine_after_confirmation,
 )
 from skills.local_routine_urls import (
     LocalRoutineUrlNotConfiguredError,
@@ -133,10 +134,20 @@ class LocalRoutinesTests(unittest.TestCase):
         routine = get_routine_definition("gaming mode")
         formatted = format_routine_preview(routine)
 
-        self.assertIn("Steam", formatted)
+        self.assertIn("NitroSense", formatted)
         self.assertIn("Discord", formatted)
+        self.assertIn("Steam", formatted)
         self.assertIn("Performance mode and Fan Max", formatted)
         self.assertIn("[requires confirmation]", formatted)
+
+        nitrosense_index = formatted.index(
+            "Performance mode and Fan Max"
+        )
+        discord_index = formatted.index("Discord")
+        steam_index = formatted.index("Steam")
+
+        self.assertLess(nitrosense_index, discord_index)
+        self.assertLess(discord_index, steam_index)
 
     def test_project_preview_includes_android_studio(self):
         routine = get_routine_definition("project mode")
@@ -305,12 +316,84 @@ class LocalRoutinesTests(unittest.TestCase):
 
         self.assertFalse(report.has_failed_steps)
         self.assertTrue(report.requires_followup_confirmation)
-        self.assertIn(("launch", "Steam"), calls)
-        self.assertIn(("launch", "Discord"), calls)
-        self.assertIn(("nitrosense", "begin"), calls)
-        self.assertIn(
-            ROUTINE_STEP_NEEDS_CONFIRMATION,
+        self.assertEqual(
+            calls,
+            [
+                ("launch", "NitroSense"),
+                ("nitrosense", "begin"),
+            ],
+        )
+        self.assertEqual(len(report.steps), 2)
+        self.assertEqual(
             [step.status for step in report.steps],
+            [
+                ROUTINE_STEP_DONE,
+                ROUTINE_STEP_NEEDS_CONFIRMATION,
+            ],
+        )
+        self.assertIn(
+            "Routine paused before remaining actions.",
+            format_routine_run_report(report),
+        )
+        self.assertIn(
+            'Say "Confirm gaming mode" to apply NitroSense and continue.',
+            format_routine_run_report(report),
+        )
+
+    def test_gaming_continuation_runs_remaining_actions(self):
+        routine = get_routine_definition("gaming mode")
+        calls = []
+
+        def launch_app(name: str) -> LaunchResult:
+            calls.append(("launch", name))
+            return LaunchResult(
+                success=True,
+                display_name=name,
+                message=f"Launched {name}",
+            )
+
+        report = continue_local_routine_after_confirmation(
+            routine,
+            confirmed_action_message=(
+                "NitroSense gaming profile applied and verified."
+            ),
+            launch_app=launch_app,
+            set_brightness=lambda level: calls.append(
+                ("brightness", level)
+            ) or BrightnessState(level=level),
+            set_volume=lambda level: calls.append(
+                ("volume", level)
+            ) or VolumeState(level=level, muted=False),
+            routine_settings=RoutineSettings(
+                brightness=100,
+                volume=50,
+            ),
+        )
+
+        self.assertFalse(report.has_failed_steps)
+        self.assertFalse(report.requires_followup_confirmation)
+        self.assertEqual(
+            calls,
+            [
+                ("launch", "Discord"),
+                ("launch", "Steam"),
+                ("brightness", 100),
+                ("volume", 50),
+            ],
+        )
+        self.assertEqual(
+            [step.status for step in report.steps],
+            [
+                ROUTINE_STEP_DONE,
+                ROUTINE_STEP_DONE,
+                ROUTINE_STEP_DONE,
+                ROUTINE_STEP_DONE,
+                ROUTINE_STEP_DONE,
+            ],
+        )
+        self.assertIn(
+            "NitroSense gaming profile applied and verified.",
+            format_routine_run_report(report),
         )
 
     def test_runner_reports_launch_failures_without_stopping(self):

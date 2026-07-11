@@ -6,6 +6,7 @@ from dataclasses import dataclass
 from typing import Final
 
 import numpy as np
+import win32api
 import win32con
 import win32gui
 from PIL import Image, ImageGrab
@@ -170,27 +171,163 @@ def validate_window_layout(window: WindowRect) -> None:
             "approved layout."
         )
 
+def _press_and_release_alt_key() -> None:
+    """Briefly press Alt to allow Windows foreground activation."""
+    win32api.keybd_event(win32con.VK_MENU, 0, 0, 0)
+    win32api.keybd_event(
+        win32con.VK_MENU,
+        0,
+        win32con.KEYEVENTF_KEYUP,
+        0,
+    )
+
+
+def _nudge_window_to_top(hwnd: int) -> None:
+    """Temporarily make a window topmost without moving or resizing it."""
+    flags = (
+        win32con.SWP_NOMOVE
+        | win32con.SWP_NOSIZE
+        | win32con.SWP_SHOWWINDOW
+    )
+
+    win32gui.SetWindowPos(
+        hwnd,
+        win32con.HWND_TOPMOST,
+        0,
+        0,
+        0,
+        0,
+        flags,
+    )
+    win32gui.SetWindowPos(
+        hwnd,
+        win32con.HWND_NOTOPMOST,
+        0,
+        0,
+        0,
+        0,
+        flags,
+    )
+
+
+def _try_set_foreground_window(hwnd: int) -> bool:
+    """Try safe foreground activation strategies for one known window."""
+    attempts = (
+        lambda: win32gui.SetForegroundWindow(hwnd),
+        lambda: (
+            _press_and_release_alt_key(),
+            win32gui.SetForegroundWindow(hwnd),
+        ),
+        lambda: (
+            _nudge_window_to_top(hwnd),
+            win32gui.SetForegroundWindow(hwnd),
+        ),
+    )
+
+    for attempt in attempts:
+        try:
+            attempt()
+        except Exception:
+            pass
+
+        time.sleep(0.10)
+
+        if win32gui.GetForegroundWindow() == hwnd:
+            return True
+
+    return False
+
+    def test_activate_window_uses_alt_fallback_when_normal_focus_fails(self):
+        calls = []
+        foreground = {"hwnd": 999}
+
+        def set_foreground_window(hwnd: int) -> None:
+            calls.append(("foreground", hwnd))
+
+            if len(
+                [
+                    call
+                    for call in calls
+                    if call[0] == "foreground"
+                ]
+            ) == 1:
+                raise Exception("foreground blocked")
+
+            foreground["hwnd"] = hwnd
+
+        fake_win32gui = SimpleNamespace(
+            IsWindow=lambda hwnd: True,
+            IsIconic=lambda hwnd: False,
+            ShowWindow=lambda hwnd, command: calls.append(
+                ("show", hwnd, command)
+            ),
+            BringWindowToTop=lambda hwnd: calls.append(
+                ("bring", hwnd)
+            ),
+            SetForegroundWindow=set_foreground_window,
+            GetForegroundWindow=lambda: foreground["hwnd"],
+            SetWindowPos=lambda *args: calls.append(
+                ("set_window_pos", args)
+            ),
+        )
+
+        fake_win32api = SimpleNamespace(
+            keybd_event=lambda *args: calls.append(
+                ("keybd_event", args)
+            )
+        )
+
+        original_win32gui = visual.win32gui
+        original_win32api = visual.win32api
+        original_sleep = visual.time.sleep
+
+        try:
+            visual.win32gui = fake_win32gui
+            visual.win32api = fake_win32api
+            visual.time.sleep = lambda _: None
+
+            visual.activate_window(700)
+        finally:
+            visual.win32gui = original_win32gui
+            visual.win32api = original_win32api
+            visual.time.sleep = original_sleep
+
+        self.assertEqual(foreground["hwnd"], 700)
+        self.assertIn(("show", 700, visual.win32con.SW_SHOW), calls)
+        self.assertIn(("bring", 700), calls)
+        self.assertIn(
+            (
+                "keybd_event",
+                (visual.win32con.VK_MENU, 0, 0, 0),
+            ),
+            calls,
+        )
 
 def activate_window(hwnd: int) -> None:
     """Bring one known window forward without clicking inside it."""
     if not win32gui.IsWindow(hwnd):
         raise RuntimeError("NitroSense window no longer exists.")
 
-    if win32gui.IsIconic(hwnd):
-        win32gui.ShowWindow(hwnd, win32con.SW_RESTORE)
-    else:
-        win32gui.ShowWindow(hwnd, win32con.SW_SHOW)
+    try:
+        if win32gui.IsIconic(hwnd):
+            win32gui.ShowWindow(hwnd, win32con.SW_RESTORE)
+        else:
+            win32gui.ShowWindow(hwnd, win32con.SW_SHOW)
 
-    win32gui.BringWindowToTop(hwnd)
-    win32gui.SetForegroundWindow(hwnd)
+        win32gui.BringWindowToTop(hwnd)
+    except Exception as error:
+        raise RuntimeError(
+            f"NitroSense could not be shown safely: {error}"
+        ) from error
 
-    time.sleep(0.35)
+    time.sleep(0.20)
 
-    if win32gui.GetForegroundWindow() != hwnd:
+    if not _try_set_foreground_window(hwnd):
         raise RuntimeError(
             "NitroSense could not be brought to the foreground."
         )
 
+    time.sleep(0.35)
 
 def restore_window(hwnd: int) -> None:
     """Best-effort restoration of the window focused before probing."""

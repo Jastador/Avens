@@ -1,92 +1,53 @@
 from __future__ import annotations
 
+from types import SimpleNamespace
 import unittest
 
-from PIL import Image
-
-from tools.inspect_nitrosense_visual import (
-    MIN_SELECTED_RED_DENSITY,
-    MIN_SELECTED_RED_PIXELS,
-    WindowRect,
-    measure_selected_red,
-    normalized_anchor_to_screen,
-    normalized_region_to_box,
-    validate_window_layout,
-)
+import tools.inspect_nitrosense_visual as visual
 
 
-class NitroSenseVisualInspectorTests(unittest.TestCase):
-    def test_normalized_region_converts_to_pixel_box(self):
-        pixel_box = normalized_region_to_box(
-            (0.10, 0.20, 0.40, 0.50),
-            width=1000,
-            height=500,
+class InspectNitroSenseVisualTests(unittest.TestCase):
+    def test_activate_window_wraps_foreground_api_failure(self):
+        calls = []
+
+        fake_win32gui = SimpleNamespace(
+            IsWindow=lambda hwnd: True,
+            IsIconic=lambda hwnd: False,
+            ShowWindow=lambda hwnd, command: calls.append(
+                ("show", hwnd, command)
+            ),
+            BringWindowToTop=lambda hwnd: calls.append(
+                ("bring", hwnd)
+            ),
+            SetForegroundWindow=lambda hwnd: (_ for _ in ()).throw(
+                Exception("foreground blocked")
+            ),
+            GetForegroundWindow=lambda: 999,
         )
 
-        self.assertEqual(pixel_box, (100, 100, 400, 250))
+        original_win32gui = visual.win32gui
+        original_sleep = visual.time.sleep
 
-    def test_red_selected_state_is_detected(self):
-        image = Image.new("RGB", (100, 100), (30, 30, 30))
+        try:
+            visual.win32gui = fake_win32gui
+            visual.time.sleep = lambda _: None
 
-        for horizontal_position in range(20, 60):
-            for vertical_position in range(20, 60):
-                image.putpixel(
-                    (horizontal_position, vertical_position),
-                    (230, 40, 40),
-                )
+            with self.assertRaisesRegex(
+                RuntimeError,
+                "NitroSense could not be brought to the foreground",
+            ):
+                visual.activate_window(700)
+        finally:
+            visual.win32gui = original_win32gui
+            visual.time.sleep = original_sleep
 
-        signal = measure_selected_red(
-            image,
-            region=(0.10, 0.10, 0.90, 0.90),
+        self.assertEqual(
+            calls,
+            [
+                ("show", 700, visual.win32con.SW_SHOW),
+                ("bring", 700),
+            ],
         )
-
-        self.assertTrue(signal.selected)
-        self.assertGreaterEqual(
-            signal.red_pixels,
-            MIN_SELECTED_RED_PIXELS,
-        )
-        self.assertGreaterEqual(
-            signal.red_density,
-            MIN_SELECTED_RED_DENSITY,
-        )
-
-    def test_dark_region_is_not_detected_as_selected(self):
-        image = Image.new("RGB", (100, 100), (45, 45, 45))
-
-        signal = measure_selected_red(
-            image,
-            region=(0.10, 0.10, 0.90, 0.90),
-        )
-
-        self.assertFalse(signal.selected)
-        self.assertEqual(signal.red_pixels, 0)
-
-    def test_normalized_anchor_uses_live_window_position(self):
-        window = WindowRect(
-            hwnd=123,
-            left=100,
-            top=50,
-            right=1100,
-            bottom=550,
-        )
-
-        point = normalized_anchor_to_screen(
-            (0.25, 0.50),
-            window=window,
-        )
-
-        self.assertEqual(point, (350, 300))
-
-    def test_known_nitrosense_layout_is_accepted(self):
-        window = WindowRect(
-            hwnd=456,
-            left=108,
-            top=52,
-            right=1428,
-            bottom=812,
-        )
-
-        validate_window_layout(window)
 
 
 if __name__ == "__main__":

@@ -31,6 +31,8 @@ COMMAND_PHRASES = (
     "start study mode",
     "start project mode",
     "start gaming mode",
+    "confirm gaming mode",
+    "cancel gaming mode",
     "start market prep mode",
     "run gaming mode",
     "set nitrosense gaming profile",
@@ -106,6 +108,7 @@ COMMAND_HOTWORDS = (
     "what routines do you have, what does study mode do, "
     "start study mode, start project mode, start gaming mode, "
     "start market prep mode, run gaming mode, "
+    "confirm gaming mode, cancel gaming mode, "
     "NitroSense, gaming profile, gaming performance, "
     "max out NitroSense fans, confirm NitroSense gaming profile, "
     "take a note, add note, show my notes, list notes, search notes, "
