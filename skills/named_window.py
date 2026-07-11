@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import ctypes
 import os
+import shlex
 from collections.abc import Callable
 from dataclasses import dataclass
 from ctypes import wintypes
@@ -75,7 +76,6 @@ if _USER32 is not None:
     _USER32.SetForegroundWindow.argtypes = (wintypes.HWND,)
     _USER32.SetForegroundWindow.restype = wintypes.BOOL
 
-
 @dataclass(frozen=True)
 class AppWindowIdentity:
     """One exact identity that can be matched to a running app window."""
@@ -83,7 +83,8 @@ class AppWindowIdentity:
     display_name: str
     executable_path: str | None
     app_user_model_id: str | None
-
+    executable_name: str | None = None
+    executable_root: str | None = None
 
 @dataclass(frozen=True)
 class NamedWindowResult:
@@ -120,6 +121,60 @@ def _normalise_executable_path(path: str) -> str:
         os.path.normpath(path.strip())
     )
 
+
+def _safe_executable_name(value: str) -> str | None:
+    """Return one safe executable filename from a shortcut argument."""
+    candidate = value.strip().strip('"')
+
+    if not candidate:
+        return None
+
+    candidate = candidate.replace("/", "\\").rsplit("\\", 1)[-1]
+
+    if not candidate.casefold().endswith(".exe"):
+        return None
+
+    return candidate.casefold()
+
+
+def _parse_process_start_executable(arguments: str) -> str | None:
+    """Parse updater-style --processStart executable arguments."""
+    try:
+        tokens = shlex.split(arguments, posix=False)
+    except ValueError:
+        return None
+
+    cleaned_tokens = [
+        token.strip().strip('"')
+        for token in tokens
+        if token.strip()
+    ]
+
+    for index, token in enumerate(cleaned_tokens):
+        token_key = token.casefold()
+
+        if (
+            token_key == "--processstart"
+            and index + 1 < len(cleaned_tokens)
+        ):
+            return _safe_executable_name(cleaned_tokens[index + 1])
+
+        prefix = "--processstart="
+
+        if token_key.startswith(prefix):
+            return _safe_executable_name(token[len(prefix):])
+
+    return None
+
+
+def _path_is_inside(candidate_path: str, root_path: str) -> bool:
+    """Return whether one normalized path is inside one normalized root."""
+    try:
+        return os.path.commonpath(
+            [candidate_path, root_path]
+        ) == root_path
+    except ValueError:
+        return False
 
 def _open_process_for_query(
     process_id: int,
@@ -327,6 +382,33 @@ def build_window_app_identity(
     ):
         return None
 
+    executable_name = os.path.basename(executable_path).casefold()
+    process_start_executable = _parse_process_start_executable(
+        launch_target.arguments
+    )
+
+    if (
+        executable_name == "update.exe"
+        and process_start_executable is not None
+    ):
+        executable_root = (
+            launch_target.working_directory.strip()
+            or os.path.dirname(executable_path)
+        )
+
+        if not executable_root:
+            return None
+
+        return AppWindowIdentity(
+            display_name=display_name,
+            executable_path=None,
+            app_user_model_id=None,
+            executable_name=process_start_executable,
+            executable_root=_normalise_executable_path(
+                executable_root
+            ),
+        )
+
     return AppWindowIdentity(
         display_name=display_name,
         executable_path=_normalise_executable_path(
@@ -392,7 +474,30 @@ def find_matching_windows(
                 != identity.executable_path
             ):
                 continue
+        elif (
+            identity.executable_name is not None
+            and identity.executable_root is not None
+        ):
+            process_path = get_process_image_path(process_id)
 
+            if not isinstance(process_path, str):
+                continue
+
+            normalized_process_path = _normalise_executable_path(
+                process_path
+            )
+            process_executable_name = os.path.basename(
+                normalized_process_path
+            ).casefold()
+
+            if process_executable_name != identity.executable_name:
+                continue
+
+            if not _path_is_inside(
+                normalized_process_path,
+                identity.executable_root,
+            ):
+                continue
         elif identity.app_user_model_id is not None:
             process_aumid = get_process_aumid(process_id)
 
