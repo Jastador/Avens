@@ -146,6 +146,10 @@ from skills.named_window import (
     control_named_window,
     inspect_named_app_windows,
 )
+from skills.discord_voice_target_resolver import (
+    DiscordVoiceTargetResolution,
+    resolve_discord_voice_target_command,
+)
 
 APP_CATALOG_REPORT_PATH = (
     LOCAL_DATA_DIR
@@ -373,6 +377,13 @@ NITROSENSE_GAMING_PROFILE_SKILL = LocalSkillDefinition(
     ),
     offline=True,
     requires_confirmation=True,
+)
+
+DISCORD_VOICE_TARGET_SKILL = LocalSkillDefinition(
+    name="resolve_discord_voice_target",
+    allowed_arguments=("target_alias",),
+    offline=True,
+    requires_confirmation=False,
 )
 
 LIST_LOCAL_ROUTINES_SKILL = LocalSkillDefinition(
@@ -1206,6 +1217,10 @@ def route_local_skill(
     user_input: str,
     *,
     launch_app: Callable[[str], LaunchResult] = launch_catalog_app,
+    resolve_discord_voice_command: Callable[
+        [str],
+        DiscordVoiceTargetResolution | None,
+    ] = resolve_discord_voice_target_command,
     refresh_catalog: Callable[[], None] = clear_catalog_cache,
     control_window: Callable[[str], ActiveWindowResult] = (
         control_active_window
@@ -1362,6 +1377,22 @@ def route_local_skill(
     ),
 ) -> SkillResult | None:
     """Handle explicit local skills before AI or legacy tools."""
+    discord_voice_resolution = resolve_discord_voice_command(
+        user_input
+    )
+
+    if discord_voice_resolution is not None:
+        console_output(discord_voice_resolution.message)
+
+        return SkillResult(
+            handled=True,
+            skill_name=DISCORD_VOICE_TARGET_SKILL.name,
+            message=discord_voice_resolution.message,
+            offline=DISCORD_VOICE_TARGET_SKILL.offline,
+            requires_confirmation=(
+                DISCORD_VOICE_TARGET_SKILL.requires_confirmation
+            ),
+        )
     routine_start_match = LOCAL_ROUTINE_START_PATTERN.match(
         user_input
     )
