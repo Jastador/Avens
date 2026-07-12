@@ -22,6 +22,7 @@ class DiscordVoiceTarget:
     alias: str
     server_name: str
     channel_name: str
+    quick_switcher_query: str | None = None
 
 
 def _normalise_alias(value: str) -> str:
@@ -72,6 +73,31 @@ def _read_required_string(
 
     return value.strip()
 
+def _read_optional_string(
+    target_config: object,
+    *,
+    field_name: str,
+    alias: str,
+) -> str | None:
+    """Read one optional non-empty string field from one target."""
+    if not isinstance(target_config, dict):
+        raise DiscordVoiceConfigError(
+            f"Discord voice target '{alias}' must be a JSON object."
+        )
+
+    if field_name not in target_config:
+        return None
+
+    value = target_config.get(field_name)
+
+    if not isinstance(value, str) or not value.strip():
+        raise DiscordVoiceConfigError(
+            f"Discord voice target '{alias}' must define "
+            f"a non-empty '{field_name}' when provided."
+        )
+
+    return value.strip()
+
 
 def load_discord_voice_targets(
     *,
@@ -115,12 +141,18 @@ def load_discord_voice_targets(
             field_name="channel_name",
             alias=alias,
         )
+        quick_switcher_query = _read_optional_string(
+            target_config,
+            field_name="quick_switcher_query",
+            alias=alias,
+        )
 
         targets.append(
             DiscordVoiceTarget(
                 alias=alias,
                 server_name=server_name,
                 channel_name=channel_name,
+                quick_switcher_query=quick_switcher_query,
             )
         )
 

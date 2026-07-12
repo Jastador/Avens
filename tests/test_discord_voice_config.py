@@ -43,6 +43,7 @@ class DiscordVoiceConfigTests(unittest.TestCase):
                         "controller": {
                             "server_name": "Test Server",
                             "channel_name": "Test Voice",
+                            "quick_switcher_query": "test voice",
                         }
                     }
                 },
@@ -55,6 +56,10 @@ class DiscordVoiceConfigTests(unittest.TestCase):
             self.assertEqual(targets[0].alias, "controller")
             self.assertEqual(targets[0].server_name, "Test Server")
             self.assertEqual(targets[0].channel_name, "Test Voice")
+            self.assertEqual(
+                targets[0].quick_switcher_query,
+                "test voice",
+            )
 
     def test_resolves_alias_without_guessing_case_or_hyphen_spacing(self):
         with TemporaryDirectory() as directory:
@@ -78,6 +83,7 @@ class DiscordVoiceConfigTests(unittest.TestCase):
             self.assertEqual(target.alias, "main voice")
             self.assertEqual(target.server_name, "Test Server")
             self.assertEqual(target.channel_name, "General Voice")
+            self.assertIsNone(target.quick_switcher_query)
 
     def test_rejects_unknown_alias(self):
         with TemporaryDirectory() as directory:
@@ -180,6 +186,27 @@ class DiscordVoiceConfigTests(unittest.TestCase):
             with self.assertRaisesRegex(
                 DiscordVoiceConfigError,
                 "channel_name",
+            ):
+                load_discord_voice_targets(path=path)
+
+    def test_rejects_empty_quick_switcher_query(self):
+        with TemporaryDirectory() as directory:
+            path = self.write_config(
+                {
+                    "targets": {
+                        "controller": {
+                            "server_name": "Test Server",
+                            "channel_name": "Test Voice",
+                            "quick_switcher_query": " ",
+                        }
+                    }
+                },
+                directory=directory,
+            )
+
+            with self.assertRaisesRegex(
+                DiscordVoiceConfigError,
+                "quick_switcher_query",
             ):
                 load_discord_voice_targets(path=path)
 
