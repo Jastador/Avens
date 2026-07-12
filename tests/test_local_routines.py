@@ -6,6 +6,9 @@ import unittest
 
 from skills.app_launcher import LaunchResult
 from skills.discord_voice_config import DiscordVoiceTarget
+from skills.discord_quick_switcher_join import (
+    DiscordQuickSwitcherJoinResult,
+)
 from skills.local_routine_settings import RoutineSettings
 from skills.local_reminders import REMINDER_KIND_TIMER
 from skills.local_routines import (
@@ -147,6 +150,10 @@ class LocalRoutinesTests(unittest.TestCase):
             "Resolve Discord voice target: configured target",
             formatted,
         )
+        self.assertIn(
+            "Join Discord voice target: configured target",
+            formatted,
+        )
         self.assertIn("Verify app window: Discord", formatted)
         self.assertIn("Verify app process: Steam", formatted)
         self.assertIn("NitroSense", formatted)
@@ -166,11 +173,15 @@ class LocalRoutinesTests(unittest.TestCase):
         voice_target_index = formatted.index(
             "Resolve Discord voice target: configured target"
         )
+        join_voice_index = formatted.index(
+            "Join Discord voice target: configured target"
+        )
 
         self.assertLess(nitrosense_index, steam_index)
         self.assertLess(steam_index, discord_index)
         self.assertLess(discord_index, focus_index)
         self.assertLess(focus_index, voice_target_index)
+        self.assertLess(voice_target_index, join_voice_index)
 
     def test_project_preview_includes_android_studio(self):
         routine = get_routine_definition("project mode")
@@ -409,6 +420,26 @@ class LocalRoutinesTests(unittest.TestCase):
                 alias=alias,
                 server_name="Test Server",
                 channel_name="Controller Voice",
+                quick_switcher_query="music 1.0",
+            )
+
+        def join_discord_voice_target(
+            alias: str,
+        ) -> DiscordQuickSwitcherJoinResult:
+            calls.append(("discord_join", alias))
+            return DiscordQuickSwitcherJoinResult(
+                success=True,
+                alias=alias,
+                target=DiscordVoiceTarget(
+                    alias=alias,
+                    server_name="Test Server",
+                    channel_name="Controller Voice",
+                    quick_switcher_query="music 1.0",
+                ),
+                message=(
+                    "Discord Quick Switcher join command sent for "
+                    "'music 1.0', sir."
+                ),
             )
 
         report = continue_local_routine_after_confirmation(
@@ -421,6 +452,7 @@ class LocalRoutinesTests(unittest.TestCase):
             wait_for_process=wait_for_process,
             bring_window_to_front=bring_window_to_front,
             resolve_discord_voice_target=resolve_discord_voice_target,
+            join_discord_voice_target=join_discord_voice_target,
             set_brightness=lambda level: calls.append(
                 ("brightness", level)
             ) or BrightnessState(level=level),
@@ -445,6 +477,7 @@ class LocalRoutinesTests(unittest.TestCase):
                 ("wait_window", "Discord"),
                 ("focus_window", "Discord"),
                 ("discord_voice", "controller"),
+                ("discord_join", "controller"),
                 ("brightness", 100),
                 ("volume", 50),
             ],
@@ -452,6 +485,7 @@ class LocalRoutinesTests(unittest.TestCase):
         self.assertEqual(
             [step.status for step in report.steps],
             [
+                ROUTINE_STEP_DONE,
                 ROUTINE_STEP_DONE,
                 ROUTINE_STEP_DONE,
                 ROUTINE_STEP_DONE,
@@ -518,6 +552,25 @@ class LocalRoutinesTests(unittest.TestCase):
                 channel_name="Controller Voice",
             )
 
+        def join_discord_voice_target(
+            alias: str,
+        ) -> DiscordQuickSwitcherJoinResult:
+            calls.append(("discord_join", alias))
+            return DiscordQuickSwitcherJoinResult(
+                success=True,
+                alias=alias,
+                target=DiscordVoiceTarget(
+                    alias=alias,
+                    server_name="Test Server",
+                    channel_name="Controller Voice",
+                    quick_switcher_query="music 1.0",
+                ),
+                message=(
+                    "Discord Quick Switcher join command sent for "
+                    "'music 1.0', sir."
+                ),
+            )
+
         report = continue_local_routine_after_confirmation(
             routine,
             confirmed_action_message=(
@@ -528,6 +581,7 @@ class LocalRoutinesTests(unittest.TestCase):
             wait_for_process=wait_for_process,
             bring_window_to_front=bring_window_to_front,
             resolve_discord_voice_target=resolve_discord_voice_target,
+            join_discord_voice_target=join_discord_voice_target,
             set_brightness=lambda level: calls.append(
                 ("brightness", level)
             ) or BrightnessState(level=level),
@@ -547,6 +601,10 @@ class LocalRoutinesTests(unittest.TestCase):
         )
         self.assertNotIn(
             ("discord_voice", "controller"),
+            calls,
+        )
+        self.assertNotIn(
+            ("discord_join", "controller"),
             calls,
         )
 
@@ -613,6 +671,117 @@ class LocalRoutinesTests(unittest.TestCase):
         self.assertEqual(
             [step.status for step in report.steps],
             [
+                ROUTINE_STEP_DONE,
+                ROUTINE_STEP_DONE,
+                ROUTINE_STEP_DONE,
+                ROUTINE_STEP_DONE,
+                ROUTINE_STEP_FAILED,
+            ],
+        )
+
+    def test_gaming_continuation_stops_when_discord_join_fails(self):
+        routine = get_routine_definition("gaming mode")
+        calls = []
+
+        def launch_app(name: str) -> LaunchResult:
+            calls.append(("launch", name))
+            return LaunchResult(
+                success=True,
+                display_name=name,
+                message=f"Launched {name}",
+            )
+
+        def wait_for_window(name: str) -> AppWindowWaitResult:
+            calls.append(("wait_window", name))
+            return AppWindowWaitResult(
+                success=True,
+                display_name=name,
+                window_count=1,
+                message=f"{name} is open with 1 verified window, sir.",
+            )
+
+        def wait_for_process(name: str) -> AppProcessWaitResult:
+            calls.append(("wait_process", name))
+            return AppProcessWaitResult(
+                success=True,
+                display_name=name,
+                process_count=1,
+                message=f"{name} is running with 1 verified process, sir.",
+            )
+
+        def bring_window_to_front(name: str) -> AppWindowFocusResult:
+            calls.append(("focus_window", name))
+            return AppWindowFocusResult(
+                success=True,
+                display_name=name,
+                message=f"Brought {name} to the foreground, sir.",
+            )
+
+        def resolve_discord_voice_target(
+            alias: str,
+        ) -> DiscordVoiceTarget:
+            calls.append(("discord_voice", alias))
+            return DiscordVoiceTarget(
+                alias=alias,
+                server_name="Test Server",
+                channel_name="Controller Voice",
+                quick_switcher_query="music 1.0",
+            )
+
+        def join_discord_voice_target(
+            alias: str,
+        ) -> DiscordQuickSwitcherJoinResult:
+            calls.append(("discord_join", alias))
+            return DiscordQuickSwitcherJoinResult(
+                success=False,
+                alias=alias,
+                target=None,
+                message="Discord Quick Switcher failed.",
+            )
+
+        report = continue_local_routine_after_confirmation(
+            routine,
+            confirmed_action_message=(
+                "NitroSense gaming profile applied and verified."
+            ),
+            launch_app=launch_app,
+            wait_for_window=wait_for_window,
+            wait_for_process=wait_for_process,
+            bring_window_to_front=bring_window_to_front,
+            resolve_discord_voice_target=resolve_discord_voice_target,
+            join_discord_voice_target=join_discord_voice_target,
+            set_brightness=lambda level: calls.append(
+                ("brightness", level)
+            ) or BrightnessState(level=level),
+            set_volume=lambda level: calls.append(
+                ("volume", level)
+            ) or VolumeState(level=level, muted=False),
+            routine_settings=RoutineSettings(
+                brightness=100,
+                volume=50,
+                discord_voice_target_alias="controller",
+            ),
+        )
+
+        self.assertTrue(report.has_failed_steps)
+        self.assertEqual(
+            calls,
+            [
+                ("launch", "Steam"),
+                ("wait_process", "Steam"),
+                ("launch", "Discord"),
+                ("wait_window", "Discord"),
+                ("focus_window", "Discord"),
+                ("discord_voice", "controller"),
+                ("discord_join", "controller"),
+            ],
+        )
+        self.assertEqual(
+            [step.status for step in report.steps],
+            [
+                ROUTINE_STEP_DONE,
+                ROUTINE_STEP_DONE,
+                ROUTINE_STEP_DONE,
                 ROUTINE_STEP_DONE,
                 ROUTINE_STEP_DONE,
                 ROUTINE_STEP_DONE,
