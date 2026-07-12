@@ -177,11 +177,11 @@ class LocalRoutinesTests(unittest.TestCase):
             "Join Discord voice target: configured target"
         )
 
-        self.assertLess(nitrosense_index, steam_index)
-        self.assertLess(steam_index, discord_index)
+        self.assertLess(nitrosense_index, discord_index)
         self.assertLess(discord_index, focus_index)
         self.assertLess(focus_index, voice_target_index)
         self.assertLess(voice_target_index, join_voice_index)
+        self.assertLess(join_voice_index, steam_index)
 
     def test_project_preview_includes_android_studio(self):
         routine = get_routine_definition("project mode")
@@ -471,13 +471,13 @@ class LocalRoutinesTests(unittest.TestCase):
         self.assertEqual(
             calls,
             [
-                ("launch", "Steam"),
-                ("wait_process", "Steam"),
                 ("launch", "Discord"),
                 ("wait_window", "Discord"),
                 ("focus_window", "Discord"),
                 ("discord_voice", "controller"),
                 ("discord_join", "controller"),
+                ("launch", "Steam"),
+                ("wait_process", "Steam"),
                 ("brightness", 100),
                 ("volume", 50),
             ],
@@ -662,8 +662,6 @@ class LocalRoutinesTests(unittest.TestCase):
         self.assertEqual(
             calls,
             [
-                ("launch", "Steam"),
-                ("wait_process", "Steam"),
                 ("launch", "Discord"),
                 ("wait_window", "Discord"),
             ],
@@ -671,8 +669,6 @@ class LocalRoutinesTests(unittest.TestCase):
         self.assertEqual(
             [step.status for step in report.steps],
             [
-                ROUTINE_STEP_DONE,
-                ROUTINE_STEP_DONE,
                 ROUTINE_STEP_DONE,
                 ROUTINE_STEP_DONE,
                 ROUTINE_STEP_FAILED,
@@ -767,8 +763,6 @@ class LocalRoutinesTests(unittest.TestCase):
         self.assertEqual(
             calls,
             [
-                ("launch", "Steam"),
-                ("wait_process", "Steam"),
                 ("launch", "Discord"),
                 ("wait_window", "Discord"),
                 ("focus_window", "Discord"),
@@ -779,8 +773,6 @@ class LocalRoutinesTests(unittest.TestCase):
         self.assertEqual(
             [step.status for step in report.steps],
             [
-                ROUTINE_STEP_DONE,
-                ROUTINE_STEP_DONE,
                 ROUTINE_STEP_DONE,
                 ROUTINE_STEP_DONE,
                 ROUTINE_STEP_DONE,
@@ -820,6 +812,14 @@ class LocalRoutinesTests(unittest.TestCase):
                 message=f"{name} did not start a verified process.",
             )
 
+        def bring_window_to_front(name: str) -> AppWindowFocusResult:
+            calls.append(("focus_window", name))
+            return AppWindowFocusResult(
+                success=True,
+                display_name=name,
+                message=f"Brought {name} to the foreground, sir.",
+            )
+
         report = continue_local_routine_after_confirmation(
             routine,
             confirmed_action_message=(
@@ -828,6 +828,7 @@ class LocalRoutinesTests(unittest.TestCase):
             launch_app=launch_app,
             wait_for_window=wait_for_window,
             wait_for_process=wait_for_process,
+            bring_window_to_front=bring_window_to_front,
             set_brightness=lambda level: calls.append(
                 ("brightness", level)
             ) or BrightnessState(level=level),
@@ -844,6 +845,9 @@ class LocalRoutinesTests(unittest.TestCase):
         self.assertEqual(
             calls,
             [
+                ("launch", "Discord"),
+                ("wait_window", "Discord"),
+                ("focus_window", "Discord"),
                 ("launch", "Steam"),
                 ("wait_process", "Steam"),
             ],
@@ -852,6 +856,11 @@ class LocalRoutinesTests(unittest.TestCase):
             [step.status for step in report.steps],
             [
                 ROUTINE_STEP_DONE,
+                ROUTINE_STEP_DONE,
+                ROUTINE_STEP_DONE,
+                ROUTINE_STEP_DONE,
+                ROUTINE_STEP_SKIPPED,
+                ROUTINE_STEP_SKIPPED,
                 ROUTINE_STEP_DONE,
                 ROUTINE_STEP_FAILED,
             ],
@@ -923,8 +932,6 @@ class LocalRoutinesTests(unittest.TestCase):
         self.assertEqual(
             calls,
             [
-                ("launch", "Steam"),
-                ("wait_process", "Steam"),
                 ("launch", "Discord"),
                 ("wait_window", "Discord"),
                 ("focus_window", "Discord"),
@@ -933,8 +940,6 @@ class LocalRoutinesTests(unittest.TestCase):
         self.assertEqual(
             [step.status for step in report.steps],
             [
-                ROUTINE_STEP_DONE,
-                ROUTINE_STEP_DONE,
                 ROUTINE_STEP_DONE,
                 ROUTINE_STEP_DONE,
                 ROUTINE_STEP_DONE,

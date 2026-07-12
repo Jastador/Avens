@@ -61,7 +61,7 @@ class DiscordQuickSwitcherJoinTests(unittest.TestCase):
             [
                 ("target", "controller"),
                 ("focus", "Discord"),
-                ("sleep", 0.15),
+                ("sleep", 2.0),
                 ("hotkey", ("ctrl", "k")),
                 ("sleep", 0.25),
                 (
@@ -214,7 +214,7 @@ class DiscordQuickSwitcherJoinTests(unittest.TestCase):
             [
                 ("target", "controller"),
                 ("focus", "Discord"),
-                ("sleep", 0.15),
+                ("sleep", 2.0),
                 ("hotkey", ("ctrl", "k")),
             ],
         )

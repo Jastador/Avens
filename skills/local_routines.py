@@ -261,18 +261,6 @@ LOCAL_ROUTINES: Final[tuple[LocalRoutine, ...]] = (
             ),
             RoutineAction(
                 label="Launch app",
-                detail="Steam",
-                action_type=ACTION_LAUNCH_APP,
-                argument="Steam",
-            ),
-            RoutineAction(
-                label="Verify app process",
-                detail="Steam",
-                action_type=ACTION_WAIT_FOR_APP_PROCESS,
-                argument="Steam",
-            ),
-            RoutineAction(
-                label="Launch app",
                 detail="Discord",
                 action_type=ACTION_LAUNCH_APP,
                 argument="Discord",
@@ -298,6 +286,18 @@ LOCAL_ROUTINES: Final[tuple[LocalRoutine, ...]] = (
                 label="Join Discord voice target",
                 detail="configured target",
                 action_type=ACTION_JOIN_DISCORD_VOICE_TARGET,
+            ),
+            RoutineAction(
+                label="Launch app",
+                detail="Steam",
+                action_type=ACTION_LAUNCH_APP,
+                argument="Steam",
+            ),
+            RoutineAction(
+                label="Verify app process",
+                detail="Steam",
+                action_type=ACTION_WAIT_FOR_APP_PROCESS,
+                argument="Steam",
             ),
             RoutineAction(
                 label="Set brightness",
