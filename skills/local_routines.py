@@ -22,6 +22,10 @@ from skills.discord_voice_config import (
     DiscordVoiceTarget,
     get_discord_voice_target,
 )
+from skills.discord_quick_switcher_join import (
+    DiscordQuickSwitcherJoinResult,
+    send_discord_quick_switcher_join_command,
+)
 from skills.app_window_wait import (
     AppWindowWaitResult,
     wait_for_app_window,
@@ -62,6 +66,9 @@ ACTION_BRING_APP_WINDOW_TO_FRONT: Final = (
 )
 ACTION_RESOLVE_DISCORD_VOICE_TARGET: Final = (
     "resolve_discord_voice_target"
+)
+ACTION_JOIN_DISCORD_VOICE_TARGET: Final = (
+    "join_discord_voice_target"
 )
 ACTION_APPROVED_URL_GROUP: Final = "approved_url_group"
 ACTION_SET_BRIGHTNESS: Final = "set_brightness"
@@ -254,18 +261,6 @@ LOCAL_ROUTINES: Final[tuple[LocalRoutine, ...]] = (
             ),
             RoutineAction(
                 label="Launch app",
-                detail="Steam",
-                action_type=ACTION_LAUNCH_APP,
-                argument="Steam",
-            ),
-            RoutineAction(
-                label="Verify app process",
-                detail="Steam",
-                action_type=ACTION_WAIT_FOR_APP_PROCESS,
-                argument="Steam",
-            ),
-            RoutineAction(
-                label="Launch app",
                 detail="Discord",
                 action_type=ACTION_LAUNCH_APP,
                 argument="Discord",
@@ -286,6 +281,23 @@ LOCAL_ROUTINES: Final[tuple[LocalRoutine, ...]] = (
                 label="Resolve Discord voice target",
                 detail="configured target",
                 action_type=ACTION_RESOLVE_DISCORD_VOICE_TARGET,
+            ),
+            RoutineAction(
+                label="Join Discord voice target",
+                detail="configured target",
+                action_type=ACTION_JOIN_DISCORD_VOICE_TARGET,
+            ),
+            RoutineAction(
+                label="Launch app",
+                detail="Steam",
+                action_type=ACTION_LAUNCH_APP,
+                argument="Steam",
+            ),
+            RoutineAction(
+                label="Verify app process",
+                detail="Steam",
+                action_type=ACTION_WAIT_FOR_APP_PROCESS,
+                argument="Steam",
             ),
             RoutineAction(
                 label="Set brightness",
@@ -469,7 +481,11 @@ def _apply_routine_settings(
         )
 
     if (
-        action.action_type == ACTION_RESOLVE_DISCORD_VOICE_TARGET
+        action.action_type
+        in {
+            ACTION_RESOLVE_DISCORD_VOICE_TARGET,
+            ACTION_JOIN_DISCORD_VOICE_TARGET,
+        }
         and settings.discord_voice_target_alias is not None
     ):
         return replace(
@@ -594,6 +610,36 @@ def _run_resolve_discord_voice_target_action(
         ),
     )
 
+def _run_join_discord_voice_target_action(
+    action: RoutineAction,
+    *,
+    join_discord_voice_target: Callable[
+        [str],
+        DiscordQuickSwitcherJoinResult,
+    ],
+) -> RoutineStepResult:
+    """Send one configured Discord Quick Switcher join command."""
+    target_alias = action.argument.strip()
+
+    if not target_alias:
+        return RoutineStepResult(
+            action=action,
+            status=ROUTINE_STEP_SKIPPED,
+            message=(
+                "Discord voice target is not configured for this "
+                "routine, sir."
+            ),
+        )
+
+    result = join_discord_voice_target(target_alias)
+    status = ROUTINE_STEP_DONE if result.success else ROUTINE_STEP_FAILED
+
+    return RoutineStepResult(
+        action=action,
+        status=status,
+        message=result.message,
+    )
+
 def _run_brightness_action(
     action: RoutineAction,
     *,
@@ -702,6 +748,10 @@ def _run_routine_action(
         [str],
         DiscordVoiceTarget,
     ],
+    join_discord_voice_target: Callable[
+        [str],
+        DiscordQuickSwitcherJoinResult,
+    ],
     set_brightness: Callable[[int], BrightnessState],
     set_volume: Callable[[int], VolumeState],
     schedule_timer_after: Callable[
@@ -742,6 +792,12 @@ def _run_routine_action(
         return _run_resolve_discord_voice_target_action(
             action,
             resolve_discord_voice_target=resolve_discord_voice_target,
+        )
+
+    if action.action_type == ACTION_JOIN_DISCORD_VOICE_TARGET:
+        return _run_join_discord_voice_target_action(
+            action,
+            join_discord_voice_target=join_discord_voice_target,
         )
 
     if action.action_type == ACTION_APPROVED_URL_GROUP:
@@ -816,6 +872,10 @@ def run_local_routine(
         [str],
         DiscordVoiceTarget,
     ] = get_discord_voice_target,
+    join_discord_voice_target: Callable[
+        [str],
+        DiscordQuickSwitcherJoinResult,
+    ] = send_discord_quick_switcher_join_command,
     set_brightness: Callable[[int], BrightnessState] = (
         set_primary_brightness
     ),
@@ -852,6 +912,7 @@ def run_local_routine(
                 resolve_discord_voice_target=(
                     resolve_discord_voice_target
                 ),
+                join_discord_voice_target=join_discord_voice_target,
                 set_brightness=set_brightness,
                 set_volume=set_volume,
                 schedule_timer_after=schedule_timer_after,
@@ -889,6 +950,7 @@ def run_local_routine(
                 ACTION_WAIT_FOR_APP_PROCESS,
                 ACTION_BRING_APP_WINDOW_TO_FRONT,
                 ACTION_RESOLVE_DISCORD_VOICE_TARGET,
+                ACTION_JOIN_DISCORD_VOICE_TARGET,
             }
         ):
             break
@@ -927,6 +989,10 @@ def continue_local_routine_after_confirmation(
         [str],
         DiscordVoiceTarget,
     ] = get_discord_voice_target,
+    join_discord_voice_target: Callable[
+        [str],
+        DiscordQuickSwitcherJoinResult,
+    ] = send_discord_quick_switcher_join_command,
     set_brightness: Callable[[int], BrightnessState] = (
         set_primary_brightness
     ),
@@ -971,6 +1037,7 @@ def continue_local_routine_after_confirmation(
                 resolve_discord_voice_target=(
                     resolve_discord_voice_target
                 ),
+                join_discord_voice_target=join_discord_voice_target,
                 set_brightness=set_brightness,
                 set_volume=set_volume,
                 schedule_timer_after=schedule_timer_after,
@@ -1006,6 +1073,7 @@ def continue_local_routine_after_confirmation(
                 ACTION_WAIT_FOR_APP_PROCESS,
                 ACTION_BRING_APP_WINDOW_TO_FRONT,
                 ACTION_RESOLVE_DISCORD_VOICE_TARGET,
+                ACTION_JOIN_DISCORD_VOICE_TARGET,
             }
         ):
             break
