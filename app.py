@@ -53,6 +53,9 @@ from PIL import Image
 # IMPORTANT: Load STT first. Do not import TTS, wake_word, brain, or UI before this.
 from core.stt import listen, init_model
 from core.performance import performance
+from core.streamed_response_session import (
+    StreamedResponseSession,
+)
 
 # These will be loaded after STT is initialized.
 speak = None
@@ -875,10 +878,34 @@ def speak_with_barge(text, pause_text=None):
     if completed is False or shared_state.get("interrupt"):
         print("⚠️ Resume speech interrupted by user.")
 
-        if isinstance(pause_text, str) and pause_text.strip():
-            shared_state["paused_response"] = pause_text.strip()
-            print(f"⏸️ Paused response kept: {pause_text.strip()}")
-        conversation_until = time.time() + CONVERSATION_TIMEOUT
+        stored_remaining = shared_state.get(
+            "paused_response",
+            "",
+        )
+
+        if (
+            isinstance(stored_remaining, str)
+            and stored_remaining.strip()
+        ):
+            print(
+                "⏸️ Precise paused response kept: "
+                f"{stored_remaining.strip()}"
+            )
+        elif (
+            isinstance(pause_text, str)
+            and pause_text.strip()
+        ):
+            shared_state["paused_response"] = (
+                pause_text.strip()
+            )
+            print(
+                "⏸️ Fallback paused response kept: "
+                f"{pause_text.strip()}"
+            )
+
+        conversation_until = (
+            time.time() + CONVERSATION_TIMEOUT
+        )
         return False
 
     return True
@@ -976,11 +1003,28 @@ def avens_loop():
             # the next speech turn has ended.
             if was_interrupted:
                 if shared_state.get("paused_response"):
-                    shared_state["state"] = "speaking"
-                    speak_with_barge("Uhh. Shall I continue, sir?")
+                    paused_before_prompt = str(
+                        shared_state["paused_response"]
+                    ).strip()
 
+                    shared_state["state"] = "speaking"
                     shared_state["interrupt"] = False
-                    shared_state["stop_interrupt_listener"] = True
+
+                    # This short prompt must not overwrite the actual
+                    # interrupted response if microphone noise occurs.
+                    speak(
+                        "Should I continue, sir?",
+                        shared_state,
+                        performance_label="resume_prompt",
+                    )
+
+                    shared_state["paused_response"] = (
+                        paused_before_prompt
+                    )
+                    shared_state["interrupt"] = False
+                    shared_state[
+                        "stop_interrupt_listener"
+                    ] = True
 
                 shared_state["state"] = "listening"
                 listen_silence_limit = 3.0
@@ -1078,9 +1122,24 @@ def avens_loop():
                 paused = paused_raw.strip()
 
             if paused and is_resume_request(lower_input):
+                shared_state["state"] = "speaking"
+
+                # Speak the bridge separately so it never becomes part
+                # of the resumable response text.
+                speak(
+                    "As I was saying.",
+                    shared_state,
+                    performance_label="resume_bridge",
+                )
+
+                # The preserved content must contain only the answer,
+                # never the presentation bridge above.
+                shared_state["paused_response"] = paused
+                shared_state["interrupt"] = False
+
                 completed = speak_with_barge(
-                    f"As I was saying, {paused}",
-                    pause_text=paused
+                    paused,
+                    pause_text=paused,
                 )
 
                 if completed:
@@ -1932,47 +1991,136 @@ def avens_loop():
 
             has_spoken_anything = False
             blocked_tool_tag_seen = False
-            # Catch sentences and tool tags from brain.py on the fly
 
-            for item_type, content in get_response(user_input):
-                # Check if you yelled "Avens" to interrupt mid-sentence
-                if shared_state.get("interrupt"):
-                    print("⚠️ Thought Process Interrupted by User!")
+            response_session = StreamedResponseSession()
+
+            # A new brain response must not inherit an older paused answer.
+            shared_state["paused_response"] = ""
+            shared_state["current_spoken_text"] = ""
+
+            brain_stream = get_response(user_input)
+
+            # Catch sentences and tool tags from brain.py on the fly.
+            for item_type, content in brain_stream:
+                if (
+                    shared_state.get("interrupt")
+                    and not response_session.interrupted
+                ):
+                    precise_remaining = shared_state.get(
+                        "paused_response",
+                        "",
+                    )
+
+                    if (
+                        response_session.current_segment
+                        is not None
+                    ):
+                        response_session.mark_current_interrupted(
+                            precise_remaining
+                        )
+                    else:
+                        response_session.mark_interrupted()
+
+                    print(
+                        "⚠️ Streamed response interrupted. "
+                        "Draining remaining text safely."
+                    )
                     just_interrupted = True
-                    # Keep mic active after interruption so Avens listens to what you were saying
-                    conversation_until = time.time() + CONVERSATION_TIMEOUT
-                    break
+                    conversation_until = (
+                        time.time() + CONVERSATION_TIMEOUT
+                    )
 
                 # --- CASE 1: HANDLE SYSTEM COMMAND TAGS ---
                 if item_type == "tag":
                     raw_tag = content.strip()
 
-                    # Extract complete command tags only, such as <CMD: HIDE>.
-                    tags = re.findall(r"<[^<>]+>", raw_tag)
+                    if (
+                        not response_session
+                        .can_execute_generated_actions
+                    ):
+                        print(
+                            "🚫 Generated tool tag discarded "
+                            "after response interruption: "
+                            f"{raw_tag}"
+                        )
+                        blocked_tool_tag_seen = True
+                        continue
+
+                    # Extract complete command tags only,
+                    # such as <CMD: HIDE>.
+                    tags = re.findall(
+                        r"<[^<>]+>",
+                        raw_tag,
+                    )
+
                     if not tags:
-                        print(f"⚠️ Ignoring malformed tag: {raw_tag}")
+                        print(
+                            f"⚠️ Ignoring malformed tag: {raw_tag}"
+                        )
                         continue
 
                     for fixed_tag in tags:
-                        if not is_tool_allowed_for_prompt(fixed_tag, user_input):
-                            print(f"🚫 Blocked hallucinated tool tag: {fixed_tag}")
+                        if not is_tool_allowed_for_prompt(
+                            fixed_tag,
+                            user_input,
+                        ):
+                            print(
+                                "🚫 Blocked hallucinated tool tag: "
+                                f"{fixed_tag}"
+                            )
                             blocked_tool_tag_seen = True
                             continue
 
-                        print(f"⚙️ EXECUTING LIVE TAG: {fixed_tag}")
-                        action_result = execute_command(fixed_tag, shared_state)
+                        print(
+                            f"⚙️ EXECUTING LIVE TAG: {fixed_tag}"
+                        )
+
+                        action_result = execute_command(
+                            fixed_tag,
+                            shared_state,
+                        )
 
                         if not action_result:
                             continue
 
                         shared_state["state"] = "speaking"
 
-                        if "time" in fixed_tag.lower() and not any(w in fixed_tag.lower() for w in ["timer", "delay", "wait"]):
-                            speak(action_result, shared_state)
-                        elif any(t in fixed_tag for t in ["<RESEARCH", "<FINANCE", "<FETCH", "<RUN"]):
-                            speak(f"Let me check the live data, sir. {action_result}", shared_state)
+                        if (
+                            "time" in fixed_tag.lower()
+                            and not any(
+                                word in fixed_tag.lower()
+                                for word in (
+                                    "timer",
+                                    "delay",
+                                    "wait",
+                                )
+                            )
+                        ):
+                            speak(
+                                action_result,
+                                shared_state,
+                            )
+
+                        elif any(
+                            tag_type in fixed_tag
+                            for tag_type in (
+                                "<RESEARCH",
+                                "<FINANCE",
+                                "<FETCH",
+                                "<RUN",
+                            )
+                        ):
+                            speak(
+                                "Let me check the live data, sir. "
+                                f"{action_result}",
+                                shared_state,
+                            )
+
                         else:
-                            speak(action_result, shared_state)
+                            speak(
+                                action_result,
+                                shared_state,
+                            )
 
                         shared_state["state"] = "thinking"
                         has_spoken_anything = True
@@ -1992,52 +2140,148 @@ def avens_loop():
                     if "Write a response that appropriately" in clean_sentence:
                         clean_sentence = clean_sentence.split("Write a response that appropriately")[0].strip()
                     if clean_sentence:
+                        response_session.append_text(
+                            clean_sentence
+                        )
+
+                        # After interruption, retain later generated text
+                        # without speaking it.
+                        if response_session.interrupted:
+                            continue
+
+                        active_segment = (
+                            response_session
+                            .begin_next_segment()
+                        )
+
+                        if active_segment is None:
+                            continue
+
                         shared_state["state"] = "speaking"
-                        shared_state["current_spoken_text"] = clean_sentence
+                        shared_state["current_spoken_text"] = (
+                            active_segment
+                        )
 
                         completed = speak(
-                            clean_sentence,
+                            active_segment,
                             shared_state,
                             performance_label="brain_response",
                         )
 
-                        if completed is False or shared_state.get("interrupt"):
-                            shared_state["paused_response"] = clean_sentence
-                            print(f"⏸️ Paused response stored: {clean_sentence}")
-                            just_interrupted = True
-                            conversation_until = time.time() + CONVERSATION_TIMEOUT
-                            break
+                        if (
+                            completed is False
+                            or shared_state.get("interrupt")
+                        ):
+                            precise_remaining = (
+                                shared_state.get(
+                                    "paused_response",
+                                    "",
+                                )
+                            )
 
-                        shared_state["current_spoken_text"] = ""
+                            response_session.mark_current_interrupted(
+                                precise_remaining
+                            )
+
+                            shared_state["paused_response"] = (
+                                response_session.remaining_text
+                            )
+
+                            print(
+                                "⏸️ Initial streamed remainder: "
+                                f"{response_session.remaining_text}"
+                            )
+
+                            just_interrupted = True
+                            conversation_until = (
+                                time.time()
+                                + CONVERSATION_TIMEOUT
+                            )
+                            shared_state[
+                                "current_spoken_text"
+                            ] = ""
+                            shared_state["state"] = "thinking"
+
+                            # Continue draining later brain events.
+                            continue
+
+                        response_session.mark_current_complete()
+
+                        shared_state[
+                            "current_spoken_text"
+                        ] = ""
                         shared_state["state"] = "thinking"
                         has_spoken_anything = True
 
-            # Stop the background microphone listener before the next listen()
-            # cycle begins. Without this join, Windows can receive two competing
-            # sounddevice input streams and report "Stream is stopped".
+            if (
+                shared_state.get("interrupt")
+                and not response_session.interrupted
+            ):
+                response_session.mark_interrupted()
+                just_interrupted = True
+                conversation_until = (
+                    time.time() + CONVERSATION_TIMEOUT
+                )
+
+            response_session.mark_generation_complete()
+
+            if response_session.interrupted:
+                final_remaining = (
+                    response_session.remaining_text.strip()
+                )
+
+                shared_state["paused_response"] = (
+                    final_remaining
+                )
+                shared_state["current_spoken_text"] = ""
+
+                print(
+                    "⏸️ Final streamed response remainder: "
+                    f"{final_remaining or '[empty]'}"
+                )
+
+            # Stop the background microphone listener before
+            # the next listen() cycle begins.
             shared_state["stop_interrupt_listener"] = True
+
             if interrupt_thread.is_alive():
                 interrupt_thread.join(timeout=1.0)
 
             if shared_state.get("interrupt"):
-                print("⚠️ Speech was interrupted by user.")
+                print(
+                    "⚠️ Speech was interrupted by user."
+                )
                 just_interrupted = True
-                conversation_until = time.time() + CONVERSATION_TIMEOUT
+                conversation_until = (
+                    time.time() + CONVERSATION_TIMEOUT
+                )
 
-            # Fallback if the generator finished but didn't actually produce output or tags
-            if not has_spoken_anything and not just_interrupted:
+            # Fallback if the generator produced no usable output.
+            if (
+                not has_spoken_anything
+                and not just_interrupted
+            ):
                 shared_state["state"] = "speaking"
+
                 if blocked_tool_tag_seen:
                     speak(
-                        "I misread that as a command, sir. Please ask it again normally.",
+                        "I misread that as a command, sir. "
+                        "Please ask it again normally.",
                         shared_state,
                     )
                 else:
-                    speak("I did not generate a usable response, sir.", shared_state)
+                    speak(
+                        "I did not generate a usable response, sir.",
+                        shared_state,
+                    )
+
             if just_interrupted:
                 time.sleep(0.5)
                 continue
-            conversation_until = time.time() + CONVERSATION_TIMEOUT
+
+            conversation_until = (
+                time.time() + CONVERSATION_TIMEOUT
+            )
             shared_state["state"] = "idle"
     except Exception as e:
         print("🔥 THREAD CRASHED:", e)
