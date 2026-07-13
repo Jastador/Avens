@@ -191,6 +191,32 @@ class StreamedResponseSessionTests(
             ),
         )
 
+    def test_idle_session_can_be_marked_interrupted(
+        self,
+    ):
+        session = StreamedResponseSession()
+
+        session.mark_interrupted()
+
+        self.assertTrue(
+            session.interrupted
+        )
+        self.assertFalse(
+            session.can_execute_generated_actions
+        )
+
+    def test_idle_interruption_rejects_active_segment(
+        self,
+    ):
+        session = StreamedResponseSession()
+        session.append_text("Active sentence.")
+        session.begin_next_segment()
+
+        with self.assertRaises(
+            RuntimeError
+        ):
+            session.mark_interrupted()
+
     def test_generated_actions_are_blocked_after_interruption(
         self,
     ):

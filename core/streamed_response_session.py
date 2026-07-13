@@ -192,6 +192,19 @@ class StreamedResponseSession:
         self.completed_count += 1
         self.active_index = None
 
+    def mark_interrupted(
+        self,
+    ) -> None:
+        """Record an interruption when no text segment is active."""
+
+        if self.active_index is not None:
+            raise RuntimeError(
+                "Use mark_current_interrupted while "
+                "a response segment is active."
+            )
+
+        self.interrupted = True
+
     def mark_current_interrupted(
         self,
         remaining_text: object | None = None,
