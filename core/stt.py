@@ -315,6 +315,62 @@ def _transcribe_audio(
         for segment in segments
     ).strip()
 
+def transcribe_recorded_audio(
+    audio_data,
+    *,
+    command_aware: bool = False,
+) -> str:
+    """Transcribe audio that has already been captured.
+
+    This function does not open the microphone. It is intended for
+    components such as barge-in detection that record their own audio
+    before asking Faster-Whisper to decode it.
+    """
+
+    global model
+
+    try:
+        normalized_audio = np.asarray(
+            audio_data,
+            dtype=np.float32,
+        ).reshape(-1)
+    except (TypeError, ValueError):
+        print(
+            "⚠️ Recorded STT audio could not be converted "
+            "to a float array."
+        )
+        return ""
+
+    if normalized_audio.size == 0:
+        return ""
+
+    if not np.isfinite(normalized_audio).all():
+        print(
+            "⚠️ Recorded STT audio contained invalid values."
+        )
+        return ""
+
+    if model is None:
+        init_model()
+
+    if model is None:
+        print(
+            "⚠️ Recorded STT transcription skipped because "
+            "the model is unavailable."
+        )
+        return ""
+
+    try:
+        return _transcribe_audio(
+            normalized_audio,
+            command_aware=command_aware,
+        )
+    except Exception as error:
+        print(
+            "⚠️ Recorded STT transcription failed: "
+            f"{error}"
+        )
+        return ""
 
 def _is_explicit_local_skill_request(text: str) -> bool:
     """Use the side-effect-free local-skill grammar checker."""

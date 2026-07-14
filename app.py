@@ -56,6 +56,11 @@ from core.performance import performance
 from core.streamed_response_session import (
     StreamedResponseSession,
 )
+from core.barge_runtime import (
+    consume_queued_barge_action,
+    queue_barge_resolution,
+    wait_for_barge_resolution,
+)
 
 # These will be loaded after STT is initialized.
 speak = None
@@ -184,6 +189,21 @@ shared_state = {
     "visible": True,
     "current_spoken_text": "",
     "paused_response": "",
+
+    # Classified speech-barge state.
+    "barge_in_transcript": "",
+    "barge_in_intent": "",
+    "barge_in_reason": "",
+    "barge_in_confidence": 0.0,
+    "barge_in_ready": False,
+    "barge_in_status": "idle",
+    "barge_in_allow_transcription": False,
+
+    # Action queued for the following voice-loop iteration.
+    "pending_barge_input": "",
+    "auto_resume_paused_response": False,
+    "last_barge_action": "",
+    "last_barge_intent": "",
 }
 
 # After Avens responds, follow-up speech is treated as intended for Avens
@@ -851,32 +871,93 @@ def capture_requested_camera_frame(
                 outcome=outcome,
             )
 
+def finalize_barge_listener(
+    interrupt_thread,
+):
+    """Finish capture, classification, and runtime queuing."""
+
+    # A triggered recorder must finish capturing even though
+    # TTS has stopped. A non-triggered recorder should exit.
+    shared_state["stop_interrupt_listener"] = True
+
+    # It is now safe for Faster-Whisper to decode the captured
+    # audio because the calling speech/generation stage is done.
+    shared_state[
+        "barge_in_allow_transcription"
+    ] = True
+
+    resolution = wait_for_barge_resolution(
+        shared_state,
+        interrupt_thread,
+        timeout_seconds=12.0,
+    )
+
+    queue_barge_resolution(
+        shared_state,
+        resolution,
+    )
+
+    if interrupt_thread.is_alive():
+        interrupt_thread.join(timeout=0.5)
+
+    if resolution.has_action:
+        print(
+            "Barge-in runtime action: "
+            f"action={resolution.action.value}, "
+            f"intent={(
+                resolution.intent.value
+                if resolution.intent is not None
+                else 'none'
+            )}, "
+            f"reason={resolution.reason}, "
+            f"confidence={resolution.confidence:.2f}, "
+            f"transcript={resolution.transcript!r}"
+        )
+
+    return resolution
+
+
 def speak_with_barge(text, pause_text=None):
     global conversation_until
 
-    from core.barge_in import listen_for_speech_interrupt
+    from core.barge_in import (
+        listen_for_speech_interrupt,
+    )
 
     shared_state["interrupt"] = False
     shared_state["stop_interrupt_listener"] = False
+    shared_state[
+        "barge_in_allow_transcription"
+    ] = False
     shared_state["state"] = "speaking"
+    shared_state["current_spoken_text"] = text
 
     interrupt_thread = threading.Thread(
         target=listen_for_speech_interrupt,
         args=(shared_state,),
-        daemon=True
+        daemon=True,
     )
     interrupt_thread.start()
 
-    completed = speak(text, shared_state)
+    completed = speak(
+        text,
+        shared_state,
+    )
 
-    # Tell the microphone listener to exit, then wait briefly so the next
-    # STT/wake listener cannot race it for the same microphone device.
-    shared_state["stop_interrupt_listener"] = True
-    if interrupt_thread.is_alive():
-        interrupt_thread.join(timeout=1.0)
+    resolution = finalize_barge_listener(
+        interrupt_thread
+    )
 
-    if completed is False or shared_state.get("interrupt"):
-        print("⚠️ Resume speech interrupted by user.")
+    shared_state["current_spoken_text"] = ""
+
+    if (
+        completed is False
+        or resolution.has_action
+    ):
+        print(
+            "⚠️ Resumable speech paused by "
+            "classified barge-in."
+        )
 
         stored_remaining = shared_state.get(
             "paused_response",
@@ -891,6 +972,7 @@ def speak_with_barge(text, pause_text=None):
                 "⏸️ Precise paused response kept: "
                 f"{stored_remaining.strip()}"
             )
+
         elif (
             isinstance(pause_text, str)
             and pause_text.strip()
@@ -898,6 +980,7 @@ def speak_with_barge(text, pause_text=None):
             shared_state["paused_response"] = (
                 pause_text.strip()
             )
+
             print(
                 "⏸️ Fallback paused response kept: "
                 f"{pause_text.strip()}"
@@ -955,122 +1038,247 @@ def avens_loop():
                     previous_turn_trace_id,
                     outcome="ok",
                 )
-            # Reset interrupt flag at the start of a new listening cycle
+            queued_barge = consume_queued_barge_action(
+                shared_state
+            )
+
+            # Reset the raw trigger before beginning the next turn.
             shared_state["interrupt"] = False
 
             was_interrupted = just_interrupted
             just_interrupted = False
 
-            # Important:
-            # We decide whether this turn is active BEFORE listen() starts,
-            # not after transcription finishes.
-            started_in_active_window = was_interrupted or (time.time() <= conversation_until)
+            captured_barge_input = (
+                queued_barge.transcript
+            )
+            input_from_barge = bool(
+                captured_barge_input
+            )
 
-            # If no active session exists, require wake word
-            if not started_in_active_window:
-                shared_state["state"] = "listening"
-                wake_detected = listen_for_wake_word(
-                    should_stop=(
-                        reminder_scheduler.has_queued_deliveries
-                    ),
+            # Background speech, echo, acknowledgements, and unclear
+            # audio resume automatically without another prompt.
+            if queued_barge.auto_resume:
+                paused_for_resume = str(
+                    shared_state.get(
+                        "paused_response",
+                        "",
+                    )
+                ).strip()
+
+                if paused_for_resume:
+                    print(
+                        "▶️ Automatically resuming after "
+                        "non-directed barge-in."
+                    )
+
+                    completed = speak_with_barge(
+                        paused_for_resume,
+                        pause_text=paused_for_resume,
+                    )
+
+                    if completed:
+                        shared_state[
+                            "paused_response"
+                        ] = ""
+                        shared_state[
+                            "current_spoken_text"
+                        ] = ""
+                    else:
+                        just_interrupted = True
+
+                conversation_until = (
+                    time.time() + CONVERSATION_TIMEOUT
+                )
+                shared_state["state"] = "idle"
+                continue
+
+            started_in_active_window = (
+                input_from_barge
+                or was_interrupted
+                or (
+                    time.time()
+                    <= conversation_until
+                )
+            )
+
+            if input_from_barge:
+                print(
+                    "🎯 Processing directed barge-in: "
+                    f"{captured_barge_input}"
                 )
 
-                # A recoverable microphone error must not make Avens answer as
-                # though a wake phrase was heard. Retry the normal wake loop.
-                if not wake_detected:
-                    if reminder_scheduler.has_queued_deliveries():
+                # This first runtime version treats a directed
+                # interruption as replacing the previous answer.
+                if shared_state.get(
+                    "paused_response"
+                ):
+                    print(
+                        "🗑️ Directed interruption replaced "
+                        "the previous paused response."
+                    )
+
+                shared_state["paused_response"] = ""
+                shared_state[
+                    "current_spoken_text"
+                ] = ""
+                shared_state["state"] = "listening"
+
+                listen_silence_limit = 0.0
+                listen_max_duration = 0.0
+
+            else:
+                # If no active session exists, require wake word.
+                if not started_in_active_window:
+                    shared_state["state"] = "listening"
+
+                    wake_detected = listen_for_wake_word(
+                        should_stop=(
+                            reminder_scheduler
+                            .has_queued_deliveries
+                        ),
+                    )
+
+                    if not wake_detected:
+                        if (
+                            reminder_scheduler
+                            .has_queued_deliveries()
+                        ):
+                            continue
+
+                        shared_state["state"] = "idle"
+                        time.sleep(0.25)
                         continue
 
-                    shared_state["state"] = "idle"
-                    time.sleep(0.25)
-                    continue
-
-                # Wake word grants an active conversation window
-                conversation_until = time.time() + CONVERSATION_TIMEOUT
-                started_in_active_window = True
-
-                shared_state["state"] = "speaking"
-                speak("Yes Sir?", shared_state)
-
-                # Start the full follow-up window after Avens finishes speaking.
-                conversation_until = time.time() + CONVERSATION_TIMEOUT
-            else:
-                print("🟡 Follow-up window active. Listening without wake word...")
-
-            shared_state["state"] = "listening"
-
-            # If Avens was interrupted, allow more silence before deciding
-            # the next speech turn has ended.
-            if was_interrupted:
-                if shared_state.get("paused_response"):
-                    paused_before_prompt = str(
-                        shared_state["paused_response"]
-                    ).strip()
+                    conversation_until = (
+                        time.time()
+                        + CONVERSATION_TIMEOUT
+                    )
+                    started_in_active_window = True
 
                     shared_state["state"] = "speaking"
-                    shared_state["interrupt"] = False
-
-                    # This short prompt must not overwrite the actual
-                    # interrupted response if microphone noise occurs.
                     speak(
-                        "Should I continue, sir?",
+                        "Yes Sir?",
                         shared_state,
-                        performance_label="resume_prompt",
                     )
 
-                    shared_state["paused_response"] = (
-                        paused_before_prompt
+                    conversation_until = (
+                        time.time()
+                        + CONVERSATION_TIMEOUT
                     )
-                    shared_state["interrupt"] = False
-                    shared_state[
-                        "stop_interrupt_listener"
-                    ] = True
+
+                else:
+                    print(
+                        "🟡 Follow-up window active. "
+                        "Listening without wake word..."
+                    )
 
                 shared_state["state"] = "listening"
-                listen_silence_limit = 3.0
-                listen_max_duration = 20
-            else:
-                # Short commands should feel responsive, while still allowing
-                # a natural brief pause inside a sentence.
-                listen_silence_limit = 1.5
 
-                # Do not keep the microphone occupied for 15 seconds after a reply
-                # when the conversation window itself is only 8 seconds.
-                remaining_follow_up_seconds = max(
-                    1.0,
-                    conversation_until - time.time(),
-                )
+                if was_interrupted:
+                    if shared_state.get(
+                        "paused_response"
+                    ):
+                        paused_before_prompt = str(
+                            shared_state[
+                                "paused_response"
+                            ]
+                        ).strip()
 
-                listen_max_duration = min(
-                    15.0,
-                    remaining_follow_up_seconds,
-                )
+                        shared_state[
+                            "state"
+                        ] = "speaking"
+                        shared_state[
+                            "interrupt"
+                        ] = False
+
+                        speak(
+                            "Should I continue, sir?",
+                            shared_state,
+                            performance_label=(
+                                "resume_prompt"
+                            ),
+                        )
+
+                        shared_state[
+                            "paused_response"
+                        ] = paused_before_prompt
+                        shared_state[
+                            "interrupt"
+                        ] = False
+                        shared_state[
+                            "stop_interrupt_listener"
+                        ] = True
+
+                    shared_state[
+                        "state"
+                    ] = "listening"
+                    listen_silence_limit = 3.0
+                    listen_max_duration = 20
+
+                else:
+                    listen_silence_limit = 1.5
+
+                    remaining_follow_up_seconds = max(
+                        1.0,
+                        conversation_until
+                        - time.time(),
+                    )
+
+                    listen_max_duration = min(
+                        15.0,
+                        remaining_follow_up_seconds,
+                    )
 
             turn_trace_id = performance.begin(
                 "voice_turn",
                 metadata={
-                    "follow_up_turn": started_in_active_window,
-                    "after_interruption": was_interrupted,
-                    "silence_limit_seconds": listen_silence_limit,
+                    "follow_up_turn": (
+                        started_in_active_window
+                    ),
+                    "after_interruption": (
+                        was_interrupted
+                    ),
+                    "silence_limit_seconds": (
+                        listen_silence_limit
+                    ),
+                    "input_source": (
+                        "barge_in"
+                        if input_from_barge
+                        else "microphone"
+                    ),
                 },
             )
 
-            performance.mark(
-                "turn_listen_requested",
-                turn_trace_id,
-                only_once=True,
-            )
+            if input_from_barge:
+                user_input = captured_barge_input
 
-            user_input = listen(
-                silence_limit=listen_silence_limit,
-                max_duration=listen_max_duration,
-            )
+                performance.mark(
+                    "transcript_received",
+                    turn_trace_id,
+                    only_once=True,
+                )
 
-            performance.mark(
-                "transcript_received",
-                turn_trace_id,
-                only_once=True,
-            )
+            else:
+                performance.mark(
+                    "turn_listen_requested",
+                    turn_trace_id,
+                    only_once=True,
+                )
+
+                user_input = listen(
+                    silence_limit=(
+                        listen_silence_limit
+                    ),
+                    max_duration=(
+                        listen_max_duration
+                    ),
+                )
+
+                performance.mark(
+                    "transcript_received",
+                    turn_trace_id,
+                    only_once=True,
+                )
 
             performance.add_prompt_metadata(
                 user_input,
@@ -1093,7 +1301,15 @@ def avens_loop():
 
             conversation_active = started_in_active_window or (time.time() <= conversation_until)
 
-            if not is_probably_talking_to_avens(user_input, conversation_active=conversation_active):
+            if (
+                not input_from_barge
+                and not is_probably_talking_to_avens(
+                    user_input,
+                    conversation_active=(
+                        conversation_active
+                    ),
+                )
+            ):
                 print("🟠 Side conversation detected. Ignoring:", user_input)
 
                 # Still keep the active window alive briefly after side-talk
@@ -2240,20 +2456,15 @@ def avens_loop():
                     f"{final_remaining or '[empty]'}"
                 )
 
-            # Stop the background microphone listener before
-            # the next listen() cycle begins.
-            shared_state["stop_interrupt_listener"] = True
+            resolution = finalize_barge_listener(
+                interrupt_thread
+            )
 
-            if interrupt_thread.is_alive():
-                interrupt_thread.join(timeout=1.0)
-
-            if shared_state.get("interrupt"):
-                print(
-                    "⚠️ Speech was interrupted by user."
-                )
+            if resolution.has_action:
                 just_interrupted = True
                 conversation_until = (
-                    time.time() + CONVERSATION_TIMEOUT
+                    time.time()
+                    + CONVERSATION_TIMEOUT
                 )
 
             # Fallback if the generator produced no usable output.
