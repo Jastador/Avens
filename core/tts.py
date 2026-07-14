@@ -6,7 +6,11 @@ import torch
 from kokoro import KPipeline
 from config import BASE_PATH
 from core.performance import performance
-from core.tts_segments import ResumableSpeechPlan
+from core.tts_segments import (
+    ResumableSpeechPlan,
+    estimate_resume_offset,
+    find_chunk_span,
+)
 
 def _read_positive_int_env(
     name: str,
@@ -116,17 +120,80 @@ def speak(
     total_playback_seconds = 0.0
     outcome = "ok"
 
+    # Playback position inside the active text segment.
+    # Kokoro may generate several text/audio chunks for one segment.
+    completed_text_offset = 0
+    active_chunk_start = 0
+    active_chunk_end = 0
+    active_chunk_elapsed = 0.0
+    active_chunk_duration = 0.0
+
     def remember_remaining_response() -> None:
         if shared_state is None:
             return
 
-        shared_state["current_spoken_text"] = (
+        current_segment = (
             speech_plan.current_segment or ""
         )
 
-        remaining_text = speech_plan.remaining_text.strip()
-        if remaining_text:
-            shared_state["paused_response"] = remaining_text
+        if not current_segment:
+            shared_state["current_spoken_text"] = ""
+            shared_state["paused_response"] = ""
+            return
+
+        resume_offset = completed_text_offset
+
+        if (
+            active_chunk_end
+            > active_chunk_start
+            and active_chunk_duration > 0
+        ):
+            resume_offset = estimate_resume_offset(
+                current_segment,
+                chunk_start=active_chunk_start,
+                chunk_end=active_chunk_end,
+                elapsed_seconds=(
+                    active_chunk_elapsed
+                ),
+                duration_seconds=(
+                    active_chunk_duration
+                ),
+                replay_words=1,
+            )
+
+        resume_offset = max(
+            0,
+            min(
+                len(current_segment),
+                resume_offset,
+            ),
+        )
+
+        current_remainder = current_segment[
+            resume_offset:
+        ].strip()
+
+        remaining_text = (
+            speech_plan
+            .remaining_text_from_offset(
+                resume_offset
+            )
+            .strip()
+        )
+
+        shared_state["current_spoken_text"] = (
+            current_remainder
+        )
+        shared_state["paused_response"] = (
+            remaining_text
+        )
+
+        print(
+            "TTS interruption position: "
+            f"segment_offset={resume_offset}, "
+            f"segment_length={len(current_segment)}, "
+            f"remaining={remaining_text!r}"
+        )
 
     try:
         if pipeline is None:
@@ -165,6 +232,13 @@ def speak(
             if current_segment is None:
                 break
 
+            # Each response segment has its own text offsets.
+            completed_text_offset = 0
+            active_chunk_start = 0
+            active_chunk_end = 0
+            active_chunk_elapsed = 0.0
+            active_chunk_duration = 0.0
+
             if shared_state is not None:
                 shared_state["current_spoken_text"] = (
                     current_segment
@@ -176,7 +250,11 @@ def speak(
                 speed=1.0,
             )
 
-            for _, _, audio_chunk in generator:
+            for (
+                generated_text,
+                _,
+                audio_chunk,
+            ) in generator:
                 if (
                     shared_state
                     and shared_state.get("interrupt", False)
@@ -194,6 +272,28 @@ def speak(
 
                 if len(audio_np) == 0:
                     continue
+
+                generated_text_value = (
+                    ""
+                    if generated_text is None
+                    else str(generated_text)
+                )
+
+                (
+                    active_chunk_start,
+                    active_chunk_end,
+                ) = find_chunk_span(
+                    current_segment,
+                    generated_text_value,
+                    start_offset=(
+                        completed_text_offset
+                    ),
+                )
+
+                active_chunk_elapsed = 0.0
+                active_chunk_duration = (
+                    len(audio_np) / 24000.0
+                )
 
                 is_first_chunk = (
                     first_audio_ready_at is None
@@ -252,7 +352,7 @@ def speak(
                             only_once=True,
                         )
 
-                duration = len(audio_np) / 24000.0
+                duration = active_chunk_duration
                 total_playback_seconds += duration
 
                 elapsed = 0.0
@@ -270,8 +370,26 @@ def speak(
                         outcome = "interrupted"
                         return False
 
-                    time.sleep(0.05)
-                    elapsed += 0.05
+                    sleep_duration = min(
+                        0.05,
+                        duration - elapsed,
+                    )
+
+                    time.sleep(
+                        sleep_duration
+                    )
+
+                    elapsed += sleep_duration
+                    active_chunk_elapsed = elapsed
+
+                completed_text_offset = max(
+                    completed_text_offset,
+                    active_chunk_end,
+                )
+
+                active_chunk_elapsed = (
+                    active_chunk_duration
+                )
 
             speech_plan.mark_current_complete()
 
