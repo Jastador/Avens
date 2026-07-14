@@ -224,6 +224,52 @@ class TtsProgressTests(
             "",
         )
 
+    def test_five_word_replay_preserves_phrase_context(
+        self,
+    ):
+        text = (
+            "I can provide a general comparison "
+            "if that helps."
+        )
+
+        result = estimate_resume_offset(
+            text,
+            chunk_start=0,
+            chunk_end=len(text),
+            elapsed_seconds=6.0,
+            duration_seconds=9.0,
+            replay_words=5,
+        )
+
+        self.assertEqual(
+            text[result:],
+            (
+                "can provide a general comparison "
+                "if that helps."
+            ),
+        )
+
+    def test_five_word_replay_rewinds_to_short_sentence_start(
+        self,
+    ):
+        text = (
+            "I don't have the capability "
+            "to recommend hardware."
+        )
+
+        result = estimate_resume_offset(
+            text,
+            chunk_start=0,
+            chunk_end=len(text),
+            elapsed_seconds=3.0,
+            duration_seconds=8.0,
+            replay_words=5,
+        )
+
+        self.assertEqual(
+            result,
+            0,
+        )
 
 if __name__ == "__main__":
     unittest.main()

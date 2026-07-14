@@ -31,6 +31,10 @@ TTS_CPU_THREADS = _read_positive_int_env(
     4,
 )
 
+# Replay a few recently spoken words after interruption so resumption
+# begins with enough grammatical context to sound natural.
+TTS_RESUME_CONTEXT_WORDS = 5
+
 try:
     torch.set_num_threads(TTS_CPU_THREADS)
     print(f"🧵 Kokoro CPU threads: {TTS_CPU_THREADS}")
@@ -158,7 +162,9 @@ def speak(
                 duration_seconds=(
                     active_chunk_duration
                 ),
-                replay_words=1,
+                replay_words=(
+                    TTS_RESUME_CONTEXT_WORDS
+                ),
             )
 
         resume_offset = max(
@@ -192,6 +198,7 @@ def speak(
             "TTS interruption position: "
             f"segment_offset={resume_offset}, "
             f"segment_length={len(current_segment)}, "
+            f"context_words={TTS_RESUME_CONTEXT_WORDS}, "
             f"remaining={remaining_text!r}"
         )
 
