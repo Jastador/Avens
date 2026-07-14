@@ -10,6 +10,7 @@ from core.barge_in import (
     SpeechCandidateRecorder,
     _store_barge_result,
     analyse_recorded_barge_in,
+    _clear_barge_result
 )
 from core.barge_intent import (
     BargeInIntent,
@@ -318,6 +319,30 @@ class SpeechCandidateRecorderTests(
         self.assertEqual(
             result.decision.intent,
             BargeInIntent.UNCLEAR,
+        )
+
+    def test_clear_result_blocks_transcription(
+        self,
+    ):
+        shared_state = {
+            "barge_in_allow_transcription": True,
+        }
+
+        _clear_barge_result(
+            shared_state
+        )
+
+        self.assertFalse(
+            shared_state[
+                "barge_in_allow_transcription"
+            ]
+        )
+        self.assertFalse(
+            shared_state["barge_in_ready"]
+        )
+        self.assertEqual(
+            shared_state["barge_in_status"],
+            "listening",
         )
 
 

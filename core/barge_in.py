@@ -251,6 +251,9 @@ def _clear_barge_result(
     shared_state["barge_in_confidence"] = 0.0
     shared_state["barge_in_ready"] = False
     shared_state["barge_in_status"] = "listening"
+    shared_state[
+        "barge_in_allow_transcription"
+    ] = False
 
 
 def _store_barge_result(
@@ -439,6 +442,17 @@ def listen_for_speech_interrupt(
         if not recorder.triggered:
             shared_state["barge_in_status"] = "idle"
             return
+
+        shared_state["barge_in_status"] = "captured"
+
+        # The app may still be draining an Ollama response.
+        # Wait before starting GPU STT so both models do not
+        # fight over the laptop's limited VRAM.
+        while not shared_state.get(
+            "barge_in_allow_transcription",
+            False,
+        ):
+            time.sleep(0.02)
 
         shared_state["barge_in_status"] = "transcribing"
 
