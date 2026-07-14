@@ -164,6 +164,154 @@ def _split_long_segment(
 
     return segments
 
+def find_chunk_span(
+    text: str,
+    chunk_text: str,
+    *,
+    start_offset: int = 0,
+) -> tuple[int, int]:
+    """Locate one generated TTS text chunk inside its segment.
+
+    Kokoro returns the text associated with each generated audio chunk.
+    The search begins after previously completed chunks so repeated words
+    earlier in the segment do not select the wrong position.
+    """
+
+    source = str(text)
+    chunk = " ".join(
+        str(chunk_text).split()
+    )
+
+    if not (
+        0 <= start_offset <= len(source)
+    ):
+        raise ValueError(
+            "start_offset must be inside the source text."
+        )
+
+    if not chunk:
+        return (
+            start_offset,
+            start_offset,
+        )
+
+    chunk_start = source.find(
+        chunk,
+        start_offset,
+    )
+
+    if chunk_start < 0:
+        chunk_start = source.casefold().find(
+            chunk.casefold(),
+            start_offset,
+        )
+
+    if chunk_start < 0:
+        # Safe fallback when Kokoro normalises punctuation or spacing.
+        chunk_start = start_offset
+        chunk_end = min(
+            len(source),
+            chunk_start + len(chunk),
+        )
+
+        return (
+            chunk_start,
+            chunk_end,
+        )
+
+    return (
+        chunk_start,
+        chunk_start + len(chunk),
+    )
+
+
+def estimate_resume_offset(
+    text: str,
+    *,
+    chunk_start: int,
+    chunk_end: int,
+    elapsed_seconds: float,
+    duration_seconds: float,
+    replay_words: int = 1,
+) -> int:
+    """Estimate a conservative word boundary for interrupted playback.
+
+    The estimate uses the fraction of the current audio chunk that finished.
+    One previously spoken word is replayed by default so resumption does not
+    begin halfway through a phrase or accidentally omit meaning.
+    """
+
+    source = str(text)
+
+    if not (
+        0 <= chunk_start
+        <= chunk_end
+        <= len(source)
+    ):
+        raise ValueError(
+            "Chunk boundaries must be inside the source text."
+        )
+
+    if replay_words < 0:
+        raise ValueError(
+            "replay_words cannot be negative."
+        )
+
+    if chunk_start == chunk_end:
+        return chunk_end
+
+    if duration_seconds <= 0:
+        return chunk_start
+
+    progress = max(
+        0.0,
+        min(
+            1.0,
+            elapsed_seconds
+            / duration_seconds,
+        ),
+    )
+
+    chunk = source[
+        chunk_start:chunk_end
+    ]
+
+    word_matches = list(
+        re.finditer(
+            r"\S+",
+            chunk,
+        )
+    )
+
+    if not word_matches:
+        return chunk_end
+
+    spoken_word_count = min(
+        len(word_matches),
+        int(
+            progress
+            * len(word_matches)
+        ),
+    )
+
+    resume_word_index = max(
+        0,
+        spoken_word_count
+        - replay_words,
+    )
+
+    if (
+        resume_word_index
+        >= len(word_matches)
+    ):
+        return chunk_end
+
+    return (
+        chunk_start
+        + word_matches[
+            resume_word_index
+        ].start()
+    )
 
 def split_response_segments(
     text: str,
@@ -291,6 +439,43 @@ class ResumableSpeechPlan:
         return " ".join(
             self.remaining_segments
         )
+
+    def remaining_text_from_offset(
+        self,
+        offset: int,
+    ) -> str:
+        """Return remaining speech from an offset in the active segment."""
+
+        current = self.current_segment
+
+        if current is None:
+            return ""
+
+        if not (
+            0 <= offset <= len(current)
+        ):
+            raise ValueError(
+                "offset must be inside the current segment."
+            )
+
+        pieces: list[str] = []
+
+        current_remainder = current[
+            offset:
+        ].strip()
+
+        if current_remainder:
+            pieces.append(
+                current_remainder
+            )
+
+        pieces.extend(
+            self.segments[
+                self.current_index + 1:
+            ]
+        )
+
+        return " ".join(pieces)
 
     def mark_current_complete(
         self,
