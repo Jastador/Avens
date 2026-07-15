@@ -105,6 +105,22 @@ COMMAND_STARTERS = (
     "cancel ",
 )
 
+CONFIRMATION_QUESTION_ENDINGS = (
+    " right",
+    " correct",
+    " is that right",
+    " am i right",
+    " isn't it",
+    " aren't they",
+    " wasn't it",
+    " weren't they",
+    " doesn't it",
+    " don't they",
+    " didn't it",
+    " wouldn't it",
+    " shouldn't it",
+)
+
 CORRECTION_STARTERS = (
     "no ",
     "nope ",
@@ -189,8 +205,14 @@ def classify_barge_in(
     cautiously resume rather than discarding the paused response.
     """
 
-    normalised = normalise_barge_text(transcript)
-    normalised_spoken = normalise_barge_text(spoken_text)
+    raw_transcript = str(transcript).strip()
+
+    normalised = normalise_barge_text(
+        raw_transcript
+    )
+    normalised_spoken = normalise_barge_text(
+        spoken_text
+    )
 
     if not normalised:
         return BargeInDecision(
@@ -230,6 +252,8 @@ def classify_barge_in(
             confidence=0.93,
         )
 
+    # Side conversation must win before punctuation-based question
+    # detection. Someone nearby can also end a sentence with a question.
     if any(
         re.search(pattern, normalised)
         for pattern in SIDE_TALK_PATTERNS
@@ -237,6 +261,34 @@ def classify_barge_in(
         return BargeInDecision(
             intent=BargeInIntent.BACKGROUND,
             reason="side_talk_pattern",
+            confidence=0.90,
+        )
+
+    if normalised in ACKNOWLEDGEMENT_PHRASES:
+        return BargeInDecision(
+            intent=BargeInIntent.ACKNOWLEDGEMENT,
+            reason="short_acknowledgement",
+            confidence=0.91,
+        )
+
+    has_question_mark = (
+        "?" in raw_transcript
+    )
+
+    has_confirmation_ending = any(
+        normalised.endswith(ending)
+        for ending in (
+            CONFIRMATION_QUESTION_ENDINGS
+        )
+    )
+
+    if (
+        has_question_mark
+        or has_confirmation_ending
+    ):
+        return BargeInDecision(
+            intent=BargeInIntent.DIRECTED,
+            reason="question",
             confidence=0.90,
         )
 
