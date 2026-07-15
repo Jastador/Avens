@@ -105,6 +105,11 @@ COMMAND_STARTERS = (
     "cancel ",
 )
 
+EXACT_COMMAND_PHRASES = {
+    "go to sleep",
+    "sleep now",
+}
+
 CONFIRMATION_QUESTION_ENDINGS = (
     " right",
     " correct",
@@ -245,7 +250,12 @@ def classify_barge_in(
             confidence=0.92,
         )
 
-    if normalised.startswith(COMMAND_STARTERS):
+    if (
+        normalised in EXACT_COMMAND_PHRASES
+        or normalised.startswith(
+            COMMAND_STARTERS
+        )
+    ):
         return BargeInDecision(
             intent=BargeInIntent.DIRECTED,
             reason="command",

@@ -239,5 +239,49 @@ class BargeIntentTests(unittest.TestCase):
             BargeInIntent.BACKGROUND,
         )
 
+    def test_go_to_sleep_is_directed_command(
+        self,
+    ):
+        decision = classify_barge_in(
+            "Go to sleep."
+        )
+
+        self.assertEqual(
+            decision.intent,
+            BargeInIntent.DIRECTED,
+        )
+        self.assertEqual(
+            decision.reason,
+            "command",
+        )
+
+    def test_sleep_now_is_directed_command(
+        self,
+    ):
+        decision = classify_barge_in(
+            "Sleep now."
+        )
+
+        self.assertEqual(
+            decision.intent,
+            BargeInIntent.DIRECTED,
+        )
+        self.assertEqual(
+            decision.reason,
+            "command",
+        )
+
+    def test_sleep_topic_is_not_command(
+        self,
+    ):
+        decision = classify_barge_in(
+            "Sleep quality affects memory."
+        )
+
+        self.assertEqual(
+            decision.intent,
+            BargeInIntent.UNCLEAR,
+        )
+
 if __name__ == "__main__":
     unittest.main()
