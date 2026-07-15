@@ -32,10 +32,14 @@ class BargeRuntimeResolution:
 
 @dataclass(frozen=True)
 class QueuedBargeAction:
-    """One action consumed by the next voice-loop iteration."""
+    """One classified action consumed by the voice loop."""
 
     transcript: str
     auto_resume: bool
+    action: BargeRuntimeAction
+    intent: BargeInIntent | None
+    reason: str
+    confidence: float
 
     @property
     def has_directed_input(self) -> bool:
@@ -64,6 +68,15 @@ def _coerce_confidence(
         min(1.0, confidence),
     )
 
+def _coerce_action(
+    value: object,
+) -> BargeRuntimeAction:
+    try:
+        return BargeRuntimeAction(
+            str(value).strip().casefold()
+        )
+    except ValueError:
+        return BargeRuntimeAction.NONE
 
 def _coerce_intent(
     value: object,
@@ -223,6 +236,21 @@ def queue_barge_resolution(
         "auto_resume_paused_response"
     ] = False
 
+    shared_state["pending_barge_action"] = (
+        resolution.action.value
+    )
+    shared_state["pending_barge_intent"] = (
+        resolution.intent.value
+        if resolution.intent is not None
+        else ""
+    )
+    shared_state["pending_barge_reason"] = (
+        resolution.reason
+    )
+    shared_state[
+        "pending_barge_confidence"
+    ] = resolution.confidence
+
     if (
         resolution.action
         is BargeRuntimeAction.DIRECTED
@@ -259,7 +287,7 @@ def queue_barge_resolution(
 def consume_queued_barge_action(
     shared_state,
 ) -> QueuedBargeAction:
-    """Read and clear the action queued for the voice loop."""
+    """Read and clear one queued classified barge action."""
 
     transcript = _normalise_transcript(
         shared_state.get(
@@ -275,12 +303,50 @@ def consume_queued_barge_action(
         )
     )
 
+    action = _coerce_action(
+        shared_state.get(
+            "pending_barge_action",
+            "",
+        )
+    )
+
+    intent = _coerce_intent(
+        shared_state.get(
+            "pending_barge_intent",
+            "",
+        )
+    )
+
+    reason = str(
+        shared_state.get(
+            "pending_barge_reason",
+            "",
+        )
+    ).strip()
+
+    confidence = _coerce_confidence(
+        shared_state.get(
+            "pending_barge_confidence",
+            0.0,
+        )
+    )
+
     shared_state["pending_barge_input"] = ""
     shared_state[
         "auto_resume_paused_response"
     ] = False
+    shared_state["pending_barge_action"] = ""
+    shared_state["pending_barge_intent"] = ""
+    shared_state["pending_barge_reason"] = ""
+    shared_state[
+        "pending_barge_confidence"
+    ] = 0.0
 
     return QueuedBargeAction(
         transcript=transcript,
         auto_resume=auto_resume,
+        action=action,
+        intent=intent,
+        reason=reason,
+        confidence=confidence,
     )
