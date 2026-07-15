@@ -64,6 +64,12 @@ from core.barge_runtime import (
 from core.interruption_context_runtime import (
     InterruptionContextCoordinator,
 )
+from core.generation_cancel import (
+    GenerationCancellationController,
+)
+from core.generation_cancel_runtime import (
+    iter_managed_generation,
+)
 
 # These will be loaded after STT is initialized.
 speak = None
@@ -185,6 +191,10 @@ def load_runtime_modules(boot_trace_id=None):
 # SHARED RUNTIME STATE
 # ==========================================
 
+generation_cancel_controller = (
+    GenerationCancellationController()
+)
+
 shared_state = {
     "state": "idle",
     "interrupt": False,
@@ -192,6 +202,9 @@ shared_state = {
     "visible": True,
     "current_spoken_text": "",
     "paused_response": "",
+    "generation_cancel_controller": (
+        generation_cancel_controller
+    ),
 
     # Classified speech-barge state.
     "barge_in_transcript": "",
@@ -2370,7 +2383,11 @@ def avens_loop():
             shared_state["paused_response"] = ""
             shared_state["current_spoken_text"] = ""
 
-            brain_stream = get_response(user_input)
+            brain_stream = iter_managed_generation(
+                generation_cancel_controller,
+                get_response,
+                user_input,
+            )
 
             # Catch sentences and tool tags from brain.py on the fly.
             for item_type, content in brain_stream:
@@ -2395,7 +2412,7 @@ def avens_loop():
 
                     print(
                         "⚠️ Streamed response interrupted. "
-                        "Draining remaining text safely."
+                        "Stopping active generation."
                     )
                     just_interrupted = True
                     conversation_until = (

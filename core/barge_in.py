@@ -12,6 +12,9 @@ from core.barge_intent import (
     BargeInIntent,
     classify_barge_in,
 )
+from core.generation_cancel_runtime import (
+    cancel_generation_from_shared_state,
+)
 from core.stt import transcribe_recorded_audio
 from utils.mic_check import get_active_mic
 from utils.microphone_lock import microphone_lock
@@ -403,10 +406,25 @@ def listen_for_speech_interrupt(
             # sound was directed speech, background speech, echo, or noise.
             shared_state["interrupt"] = True
 
+            generation_cancelled = (
+                cancel_generation_from_shared_state(
+                    shared_state,
+                    reason=(
+                        "provisional_speech_barge_in"
+                    ),
+                )
+            )
+
             print(
                 "Provisional speech barge-in detected. "
                 f"Energy={energy:.4f}"
             )
+
+            if generation_cancelled:
+                print(
+                    "🛑 Active brain generation "
+                    "cancellation requested."
+                )
 
     try:
         with microphone_lock:
