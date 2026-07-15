@@ -191,6 +191,30 @@ class BargeRuntimeTests(
                 "auto_resume_paused_response"
             ]
         )
+        self.assertEqual(
+            shared_state[
+                "pending_barge_action"
+            ],
+            "directed",
+        )
+        self.assertEqual(
+            shared_state[
+                "pending_barge_intent"
+            ],
+            "directed",
+        )
+        self.assertEqual(
+            shared_state[
+                "pending_barge_reason"
+            ],
+            "command",
+        )
+        self.assertEqual(
+            shared_state[
+                "pending_barge_confidence"
+            ],
+            0.93,
+        )
 
     def test_resume_is_queued_when_response_exists(
         self,
@@ -264,6 +288,18 @@ class BargeRuntimeTests(
             "auto_resume_paused_response": (
                 False
             ),
+            "pending_barge_action": (
+                "directed"
+            ),
+            "pending_barge_intent": (
+                "directed"
+            ),
+            "pending_barge_reason": (
+                "question"
+            ),
+            "pending_barge_confidence": (
+                0.92
+            ),
         }
 
         queued = consume_queued_barge_action(
@@ -278,6 +314,22 @@ class BargeRuntimeTests(
             queued.has_directed_input
         )
         self.assertEqual(
+            queued.action,
+            BargeRuntimeAction.DIRECTED,
+        )
+        self.assertEqual(
+            queued.intent,
+            BargeInIntent.DIRECTED,
+        )
+        self.assertEqual(
+            queued.reason,
+            "question",
+        )
+        self.assertEqual(
+            queued.confidence,
+            0.92,
+        )
+        self.assertEqual(
             shared_state[
                 "pending_barge_input"
             ],
@@ -287,6 +339,30 @@ class BargeRuntimeTests(
             shared_state[
                 "auto_resume_paused_response"
             ]
+        )
+        self.assertEqual(
+            shared_state[
+                "pending_barge_action"
+            ],
+            "",
+        )
+        self.assertEqual(
+            shared_state[
+                "pending_barge_intent"
+            ],
+            "",
+        )
+        self.assertEqual(
+            shared_state[
+                "pending_barge_reason"
+            ],
+            "",
+        )
+        self.assertEqual(
+            shared_state[
+                "pending_barge_confidence"
+            ],
+            0.0,
         )
 
     def test_finished_listener_can_be_resolved(

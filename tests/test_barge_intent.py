@@ -193,6 +193,95 @@ class BargeIntentTests(unittest.TestCase):
         self.assertTrue(decision.is_directed)
         self.assertFalse(decision.should_resume)
 
+    def test_confirmation_question_is_directed(
+        self,
+    ):
+        decision = classify_barge_in(
+            (
+                "So basically offline is the "
+                "safest method, right?"
+            )
+        )
+
+        self.assertEqual(
+            decision.intent,
+            BargeInIntent.DIRECTED,
+        )
+        self.assertEqual(
+            decision.reason,
+            "question",
+        )
+
+    def test_confirmation_question_without_punctuation_is_directed(
+        self,
+    ):
+        decision = classify_barge_in(
+            (
+                "So basically offline is the "
+                "safest method right"
+            )
+        )
+
+        self.assertEqual(
+            decision.intent,
+            BargeInIntent.DIRECTED,
+        )
+
+    def test_side_talk_question_remains_background(
+        self,
+    ):
+        decision = classify_barge_in(
+            "Haan mummy, aa raha hoon?"
+        )
+
+        self.assertEqual(
+            decision.intent,
+            BargeInIntent.BACKGROUND,
+        )
+
+    def test_go_to_sleep_is_directed_command(
+        self,
+    ):
+        decision = classify_barge_in(
+            "Go to sleep."
+        )
+
+        self.assertEqual(
+            decision.intent,
+            BargeInIntent.DIRECTED,
+        )
+        self.assertEqual(
+            decision.reason,
+            "command",
+        )
+
+    def test_sleep_now_is_directed_command(
+        self,
+    ):
+        decision = classify_barge_in(
+            "Sleep now."
+        )
+
+        self.assertEqual(
+            decision.intent,
+            BargeInIntent.DIRECTED,
+        )
+        self.assertEqual(
+            decision.reason,
+            "command",
+        )
+
+    def test_sleep_topic_is_not_command(
+        self,
+    ):
+        decision = classify_barge_in(
+            "Sleep quality affects memory."
+        )
+
+        self.assertEqual(
+            decision.intent,
+            BargeInIntent.UNCLEAR,
+        )
 
 if __name__ == "__main__":
     unittest.main()

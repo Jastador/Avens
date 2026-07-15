@@ -61,6 +61,9 @@ from core.barge_runtime import (
     queue_barge_resolution,
     wait_for_barge_resolution,
 )
+from core.interruption_context_runtime import (
+    InterruptionContextCoordinator,
+)
 
 # These will be loaded after STT is initialized.
 speak = None
@@ -202,6 +205,10 @@ shared_state = {
     # Action queued for the following voice-loop iteration.
     "pending_barge_input": "",
     "auto_resume_paused_response": False,
+    "pending_barge_action": "",
+    "pending_barge_intent": "",
+    "pending_barge_reason": "",
+    "pending_barge_confidence": 0.0,
     "last_barge_action": "",
     "last_barge_intent": "",
 }
@@ -993,6 +1000,79 @@ def speak_with_barge(text, pause_text=None):
 
     return True
 
+def resume_interruption_contexts(
+    interruption_context,
+):
+    """Resume pending interrupted responses in LIFO order."""
+
+    global conversation_until
+
+    while (
+        interruption_context
+        .has_pending_return
+    ):
+        frame = (
+            interruption_context
+            .take_next_response()
+        )
+
+        if frame is None:
+            break
+
+        response_text = (
+            frame.response_text.strip()
+        )
+
+        if not response_text:
+            continue
+
+        print(
+            "↩️ Returning to interrupted response: "
+            f"remaining_depth={(
+                interruption_context.depth
+            )}, "
+            f"text={response_text!r}"
+        )
+
+        shared_state["state"] = "speaking"
+        shared_state["interrupt"] = False
+
+        # Keep the bridge separate from the resumable answer.
+        speak(
+            "Returning to the earlier point, sir.",
+            shared_state,
+            performance_label=(
+                "interruption_return_bridge"
+            ),
+        )
+
+        shared_state["paused_response"] = (
+            response_text
+        )
+        shared_state[
+            "current_spoken_text"
+        ] = ""
+        shared_state["interrupt"] = False
+
+        completed = speak_with_barge(
+            response_text,
+            pause_text=response_text,
+        )
+
+        conversation_until = (
+            time.time() + CONVERSATION_TIMEOUT
+        )
+
+        if not completed:
+            return False
+
+        shared_state["paused_response"] = ""
+        shared_state[
+            "current_spoken_text"
+        ] = ""
+
+    return True
+
 def avens_loop():
     global conversation_until
 
@@ -1008,7 +1088,13 @@ def avens_loop():
             print("⏰ Local reminder scheduler started.")
         speak("Avens is now online.")
         print("Loop running...")
+
+        interruption_context = (
+            InterruptionContextCoordinator()
+        )
+
         just_interrupted = False
+
         while True:
             due_reminders = reminder_scheduler.drain_deliveries()
 
@@ -1065,6 +1151,8 @@ def avens_loop():
                     )
                 ).strip()
 
+                completed = True
+
                 if paused_for_resume:
                     print(
                         "▶️ Automatically resuming after "
@@ -1086,8 +1174,32 @@ def avens_loop():
                     else:
                         just_interrupted = True
 
+                # Acknowledgement, background speech, echo, or unclear
+                # audio may interrupt a clarification answer while an
+                # older response is still waiting in the context stack.
+                # Once the current answer finishes, continue that stack.
+                if (
+                    completed
+                    and interruption_context
+                    .has_pending_return
+                ):
+                    print(
+                        "↩️ Automatic resume completed; "
+                        "continuing preserved response context."
+                    )
+
+                    returned_cleanly = (
+                        resume_interruption_contexts(
+                            interruption_context
+                        )
+                    )
+
+                    if not returned_cleanly:
+                        just_interrupted = True
+
                 conversation_until = (
-                    time.time() + CONVERSATION_TIMEOUT
+                    time.time()
+                    + CONVERSATION_TIMEOUT
                 )
                 shared_state["state"] = "idle"
                 continue
@@ -1107,16 +1219,60 @@ def avens_loop():
                     f"{captured_barge_input}"
                 )
 
-                # This first runtime version treats a directed
-                # interruption as replacing the previous answer.
-                if shared_state.get(
-                    "paused_response"
+                paused_before_interruption = str(
+                    shared_state.get(
+                        "paused_response",
+                        "",
+                    )
+                ).strip()
+
+                context_update = (
+                    interruption_context
+                    .handle_directed_interruption(
+                        paused_response=(
+                            paused_before_interruption
+                        ),
+                        transcript=(
+                            captured_barge_input
+                        ),
+                        classification_reason=(
+                            queued_barge.reason
+                        ),
+                    )
+                )
+
+                if context_update.preserved:
+                    print(
+                        "📚 Interrupted response preserved: "
+                        f"depth={(
+                            interruption_context.depth
+                        )}, "
+                        f"reason={(
+                            context_update
+                            .decision.reason
+                        )}"
+                    )
+
+                elif (
+                    paused_before_interruption
+                    or context_update
+                    .discarded_count
                 ):
                     print(
                         "🗑️ Directed interruption replaced "
-                        "the previous paused response."
+                        "previous response context: "
+                        f"reason={(
+                            context_update
+                            .decision.reason
+                        )}, "
+                        f"discarded={(
+                            context_update
+                            .discarded_count
+                        )}"
                     )
 
+                # The clarification or replacement answer now owns
+                # paused_response. Preserved text lives in the stack.
                 shared_state["paused_response"] = ""
                 shared_state[
                     "current_spoken_text"
@@ -2466,6 +2622,23 @@ def avens_loop():
                     time.time()
                     + CONVERSATION_TIMEOUT
                 )
+
+            elif (
+                interruption_context
+                .has_pending_return
+            ):
+                returned_cleanly = (
+                    resume_interruption_contexts(
+                        interruption_context
+                    )
+                )
+
+                if not returned_cleanly:
+                    just_interrupted = True
+                    conversation_until = (
+                        time.time()
+                        + CONVERSATION_TIMEOUT
+                    )
 
             # Fallback if the generator produced no usable output.
             if (
