@@ -345,6 +345,63 @@ class SpeechCandidateRecorderTests(
             "listening",
         )
 
+    def test_trigger_counts_required_voiced_blocks(
+        self,
+    ):
+        recorder = self.create_recorder()
+
+        for _ in range(3):
+            recorder.add_block(
+                audio_block(0.7),
+                0.7,
+            )
+
+        self.assertEqual(
+            recorder.voiced_blocks,
+            3,
+        )
+
+    def test_loud_capture_block_increases_voiced_count(
+        self,
+    ):
+        recorder = self.create_recorder()
+
+        for _ in range(3):
+            recorder.add_block(
+                audio_block(0.7),
+                0.7,
+            )
+
+        recorder.add_block(
+            audio_block(0.7),
+            0.7,
+        )
+
+        self.assertEqual(
+            recorder.voiced_blocks,
+            4,
+        )
+
+    def test_silent_capture_block_does_not_increase_voiced_count(
+        self,
+    ):
+        recorder = self.create_recorder()
+
+        for _ in range(3):
+            recorder.add_block(
+                audio_block(0.7),
+                0.7,
+            )
+
+        recorder.add_block(
+            audio_block(0.0),
+            0.0,
+        )
+
+        self.assertEqual(
+            recorder.voiced_blocks,
+            3,
+        )
 
 if __name__ == "__main__":
     unittest.main()

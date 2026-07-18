@@ -8,6 +8,9 @@ import requests
 from dotenv import load_dotenv
 
 from config import OLLAMA_MODEL
+from core.generation_cancel import (
+    GenerationCancellationToken,
+)
 from core.memory import load_memory
 from core.mode_controller import mode_controller
 from core.profile import load_user_profile
@@ -259,6 +262,35 @@ def _yield_complete_reply(reply: str):
     if text_buffer.strip():
         yield ("text", text_buffer.strip())
 
+def _generation_is_cancelled(
+    cancellation_token: (
+        GenerationCancellationToken | None
+    ),
+) -> bool:
+    """Return whether the current brain generation was cancelled."""
+
+    return (
+        cancellation_token is not None
+        and cancellation_token.is_cancelled
+    )
+
+
+def _iter_cancellable_lines(
+    response,
+    cancellation_token: (
+        GenerationCancellationToken | None
+    ) = None,
+):
+    """Yield Ollama response lines until cancellation is requested."""
+
+    for line in response.iter_lines():
+        if _generation_is_cancelled(
+            cancellation_token
+        ):
+            return
+
+        yield line
+
 
 def _fallback_to_local(
     prompt: str,
@@ -382,8 +414,14 @@ def gemini_ai(prompt: str):
         yield from _fallback_to_local(prompt, str(error))
 
 
-def offline_ai(prompt: str):
-    """Stream a response from the local custom_avens Ollama model."""
+def offline_ai(
+    prompt: str,
+    *,
+    cancellation_token: (
+        GenerationCancellationToken | None
+    ) = None,
+):
+    """Stream a cancellable response from local Ollama."""
     trace_id = performance.current_trace_id()
     owns_trace = trace_id is None
 
@@ -407,6 +445,7 @@ def offline_ai(prompt: str):
 
     outcome = "ok"
     request_started_at = None
+    response = None
     full_reply = ""
     text_buffer = ""
     tag_buffer = ""
@@ -445,6 +484,11 @@ def offline_ai(prompt: str):
         )
 
     try:
+        if _generation_is_cancelled(
+            cancellation_token
+        ):
+            outcome = "cancelled"
+            return
         print(f"🧠 Using local brain ({OLLAMA_MODEL})...")
 
         performance.mark(
@@ -630,14 +674,53 @@ def offline_ai(prompt: str):
                             yield ("text", text_to_yield)
                             text_buffer = ""
 
+        if _generation_is_cancelled(
+            cancellation_token
+        ):
+            outcome = "cancelled"
+
+            cancellation_reason = (
+                cancellation_token.reason
+                if cancellation_token is not None
+                else "cancelled"
+            )
+
+            print(
+                "🛑 Local brain generation cancelled: "
+                f"reason={cancellation_reason!r}, "
+                f"generated_characters={len(full_reply)}"
+            )
+
+            performance.add_metadata(
+                {
+                    "brain_generation_cancelled": (
+                        True
+                    ),
+                    "brain_generation_cancel_reason": (
+                        cancellation_reason
+                    ),
+                },
+                trace_id,
+            )
+
+            # Retain text already generated so a clarification can
+            # still refer to what Avens actually said.
+            if full_reply.strip():
+                manage_memory(
+                    "assistant",
+                    full_reply.strip(),
+                )
+            else:
+                _remove_last_user_turn(prompt)
+
+            return
+
         if in_tag and tag_buffer:
             text_buffer += tag_buffer
 
         if text_buffer.strip():
             text_to_yield = text_buffer.strip()
-
             record_first_text_event(text_to_yield)
-
             yield ("text", text_to_yield)
 
         manage_memory("assistant", full_reply)
@@ -661,6 +744,9 @@ def offline_ai(prompt: str):
         )
 
     finally:
+        if response is not None:
+            response.close()
+
         if request_started_at is not None:
             performance.record_stage(
                 "brain_ollama_stream_wall_seconds",
@@ -686,12 +772,23 @@ def offline_ai(prompt: str):
             )
 
 
-def get_response(prompt: str):
+def get_response(
+    prompt: str,
+    *,
+    cancellation_token: (
+        GenerationCancellationToken | None
+    ) = None,
+):
     """Route one question through the current explicit brain mode."""
     state = mode_controller.snapshot()
 
     if state.brain_mode != "online":
-        return offline_ai(prompt)
+        return offline_ai(
+            prompt,
+            cancellation_token=(
+                cancellation_token
+            ),
+        )
 
     if state.brain_provider == "gpt":
         return gpt_ai(prompt)
@@ -704,4 +801,9 @@ def get_response(prompt: str):
         "Returning to local Ollama.",
     )
 
-    return offline_ai(prompt)
+    return offline_ai(
+        prompt,
+        cancellation_token=(
+            cancellation_token
+        ),
+    )
