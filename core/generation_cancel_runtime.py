@@ -6,6 +6,9 @@ from typing import Any
 from core.generation_cancel import (
     GenerationCancellationController,
 )
+from core.generation_worker import (
+    GenerationWorker,
+)
 
 DEFAULT_MINIMUM_VOICED_SECONDS = 0.55
 
@@ -71,6 +74,76 @@ def iter_managed_generation(
     finally:
         controller.finish_generation(token)
 
+def create_managed_generation_worker(
+    controller: GenerationCancellationController,
+    stream_factory: Callable[..., Any],
+    prompt: str,
+    *,
+    thread_name: str = (
+        "avens-managed-generation"
+    ),
+    queue_capacity: int = 1,
+) -> GenerationWorker:
+    """Create an unstarted worker for one managed brain stream."""
+
+    return GenerationWorker(
+        stream_factory=lambda: (
+            iter_managed_generation(
+                controller,
+                stream_factory,
+                prompt,
+            )
+        ),
+        thread_name=thread_name,
+        queue_capacity=queue_capacity,
+    )
+
+
+def iter_background_generation(
+    controller: GenerationCancellationController,
+    stream_factory: Callable[..., Any],
+    prompt: str,
+    *,
+    poll_timeout: float = 0.05,
+    queue_capacity: int = 1,
+) -> Iterator[tuple[str, str]]:
+    """Yield generation items produced by a background worker.
+
+    Producer errors are raised in the consumer thread so existing runtime
+    error handling can continue to behave normally.
+    """
+
+    worker = create_managed_generation_worker(
+        controller,
+        stream_factory,
+        prompt,
+        queue_capacity=queue_capacity,
+    )
+
+    worker.start()
+
+    try:
+        for event in worker.iter_events(
+            poll_timeout=poll_timeout,
+        ):
+            if event.is_item:
+                yield event.item
+                continue
+
+            if event.is_error:
+                error = event.error
+
+                if error is None:
+                    raise RuntimeError(
+                        "Generation worker emitted "
+                        "an error event without an error."
+                    )
+
+                raise error
+
+    finally:
+        worker.request_stop()
+        worker.join(timeout=1.0)
 
 def cancel_generation_from_shared_state(
     shared_state,

@@ -59,6 +59,7 @@ from core.streamed_response_session import (
 from core.barge_runtime import (
     consume_queued_barge_action,
     queue_barge_resolution,
+    wait_for_barge_capture,
     wait_for_barge_resolution,
 )
 from core.interruption_context_runtime import (
@@ -68,7 +69,7 @@ from core.generation_cancel import (
     GenerationCancellationController,
 )
 from core.generation_cancel_runtime import (
-    iter_managed_generation,
+    iter_background_generation,
 )
 
 # These will be loaded after STT is initialized.
@@ -2378,15 +2379,18 @@ def avens_loop():
             blocked_tool_tag_seen = False
 
             response_session = StreamedResponseSession()
+            barge_capture_waited = False
 
             # A new brain response must not inherit an older paused answer.
             shared_state["paused_response"] = ""
             shared_state["current_spoken_text"] = ""
 
-            brain_stream = iter_managed_generation(
+            brain_stream = iter_background_generation(
                 generation_cancel_controller,
                 get_response,
                 user_input,
+                poll_timeout=0.05,
+                queue_capacity=1,
             )
 
             # Catch sentences and tool tags from brain.py on the fly.
@@ -2418,6 +2422,23 @@ def avens_loop():
                     conversation_until = (
                         time.time() + CONVERSATION_TIMEOUT
                     )
+                    if not barge_capture_waited:
+                        capture_status = (
+                            wait_for_barge_capture(
+                                shared_state,
+                                interrupt_thread,
+                                timeout_seconds=7.0,
+                                poll_seconds=0.02,
+                            )
+                        )
+
+                        barge_capture_waited = True
+
+                        print(
+                            "⏸️ Generation consumer held "
+                            "until barge capture finished: "
+                            f"status={capture_status!r}"
+                        )
 
                 # --- CASE 1: HANDLE SYSTEM COMMAND TAGS ---
                 if item_type == "tag":
@@ -2591,7 +2612,27 @@ def avens_loop():
                             ] = ""
                             shared_state["state"] = "thinking"
 
-                            # Continue draining later brain events.
+                            if not barge_capture_waited:
+                                capture_status = (
+                                    wait_for_barge_capture(
+                                        shared_state,
+                                        interrupt_thread,
+                                        timeout_seconds=7.0,
+                                        poll_seconds=0.02,
+                                    )
+                                )
+
+                                barge_capture_waited = True
+
+                                print(
+                                    "⏸️ Generation consumer held "
+                                    "until barge capture finished: "
+                                    f"status={capture_status!r}"
+                                )
+
+                            # Capture is now finished. Resume consumption so a
+                            # short acknowledgement may complete generation, or
+                            # a cancelled producer may close cleanly.
                             continue
 
                         response_session.mark_current_complete()

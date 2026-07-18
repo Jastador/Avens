@@ -11,6 +11,7 @@ from core.barge_runtime import (
     consume_queued_barge_action,
     queue_barge_resolution,
     read_barge_resolution,
+    wait_for_barge_capture,
     wait_for_barge_resolution,
 )
 
@@ -27,6 +28,27 @@ class FinishedThread:
             "A finished thread should not be joined."
         )
 
+class CaptureProgressThread:
+    def __init__(
+        self,
+        shared_state,
+    ) -> None:
+        self.shared_state = shared_state
+        self.join_calls = 0
+
+    def is_alive(self) -> bool:
+        return True
+
+    def join(
+        self,
+        timeout=None,
+    ) -> None:
+        del timeout
+
+        self.join_calls += 1
+        self.shared_state[
+            "barge_in_status"
+        ] = "captured"
 
 class BargeRuntimeTests(
     unittest.TestCase
@@ -385,6 +407,71 @@ class BargeRuntimeTests(
             BargeRuntimeAction.RESUME,
         )
 
+    def test_existing_capture_status_returns_immediately(
+        self,
+    ):
+        result = wait_for_barge_capture(
+            {
+                "barge_in_status": (
+                    "captured"
+                ),
+            },
+            FinishedThread(),
+        )
+
+        self.assertEqual(
+            result,
+            "captured",
+        )
+
+    def test_wait_for_capture_polls_until_captured(
+        self,
+    ):
+        shared_state = {
+            "barge_in_status": (
+                "capturing"
+            ),
+        }
+
+        listener = CaptureProgressThread(
+            shared_state
+        )
+
+        result = wait_for_barge_capture(
+            shared_state,
+            listener,
+            timeout_seconds=1.0,
+            poll_seconds=0.01,
+        )
+
+        self.assertEqual(
+            result,
+            "captured",
+        )
+        self.assertEqual(
+            listener.join_calls,
+            1,
+        )
+
+    def test_capture_wait_rejects_invalid_timeout(
+        self,
+    ):
+        with self.assertRaises(ValueError):
+            wait_for_barge_capture(
+                {},
+                FinishedThread(),
+                timeout_seconds=0.0,
+            )
+
+    def test_capture_wait_rejects_invalid_poll_interval(
+        self,
+    ):
+        with self.assertRaises(ValueError):
+            wait_for_barge_capture(
+                {},
+                FinishedThread(),
+                poll_seconds=0.0,
+            )
 
 if __name__ == "__main__":
     unittest.main()
