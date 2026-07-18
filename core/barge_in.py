@@ -14,6 +14,7 @@ from core.barge_intent import (
 )
 from core.generation_cancel_runtime import (
     cancel_generation_from_shared_state,
+    should_cancel_generation_for_voiced_speech,
 )
 from core.stt import transcribe_recorded_audio
 from utils.mic_check import get_active_mic
@@ -42,6 +43,10 @@ class SpeechCandidateRecorder:
     pre_roll_blocks: int = 6
 
     consecutive_start_hits: int = field(
+        default=0,
+        init=False,
+    )
+    voiced_blocks: int = field(
         default=0,
         init=False,
     )
@@ -114,6 +119,7 @@ class SpeechCandidateRecorder:
             return
 
         self.consecutive_start_hits = 0
+        self.voiced_blocks = 0
         self._pre_roll.clear()
 
     def add_block(
@@ -160,6 +166,12 @@ class SpeechCandidateRecorder:
                 return "waiting"
 
             self.triggered = True
+
+            # The consecutive start hits were all voiced blocks.
+            self.voiced_blocks = (
+                self.required_start_hits
+            )
+
             self.recorded_blocks.extend(
                 list(self._pre_roll)
             )
@@ -177,6 +189,7 @@ class SpeechCandidateRecorder:
         self.recorded_blocks.append(block)
 
         if energy >= self.end_threshold:
+            self.voiced_blocks += 1
             self.trailing_silence_blocks = 0
         else:
             self.trailing_silence_blocks += 1
@@ -335,6 +348,9 @@ def listen_for_speech_interrupt(
     )
 
     spoken_text_snapshot = ""
+    generation_cancel_requested = False
+    speech_candidate_announced = False
+
     _clear_barge_result(shared_state)
 
     def callback(
@@ -344,6 +360,8 @@ def listen_for_speech_interrupt(
         status,
     ):
         nonlocal spoken_text_snapshot
+        nonlocal generation_cancel_requested
+        nonlocal speech_candidate_announced
 
         del frames
         del time_info
@@ -379,18 +397,19 @@ def listen_for_speech_interrupt(
                 f"Barge energy: {energy:.4f}"
             )
 
+        # Every block must reach the recorder. Quiet blocks are required
+        # for trailing-silence detection and utterance completion.
         event = recorder.add_block(
-            audio,
+            indata.copy(),
             energy,
         )
 
-        if event in {
-            "triggered",
-            "finished",
-        } and not shared_state.get(
-            "interrupt",
-            False,
+        if (
+            event == "triggered"
+            and not speech_candidate_announced
         ):
+            speech_candidate_announced = True
+
             spoken_text_snapshot = str(
                 shared_state.get(
                     "current_spoken_text",
@@ -402,28 +421,53 @@ def listen_for_speech_interrupt(
                 "barge_in_status"
             ] = "capturing"
 
-            # Pause TTS immediately, but do not yet decide whether the
-            # sound was directed speech, background speech, echo, or noise.
+            # TTS always pauses immediately. Ollama cancellation waits
+            # until enough voiced audio has accumulated.
             shared_state["interrupt"] = True
-
-            generation_cancelled = (
-                cancel_generation_from_shared_state(
-                    shared_state,
-                    reason=(
-                        "provisional_speech_barge_in"
-                    ),
-                )
-            )
 
             print(
                 "Provisional speech barge-in detected. "
                 f"Energy={energy:.4f}"
             )
 
+        # This must run on every captured audio block, including blocks
+        # where add_block() returns no new recorder event.
+        should_cancel_generation = (
+            recorder.triggered
+            and not generation_cancel_requested
+            and (
+                should_cancel_generation_for_voiced_speech(
+                    recorder.voiced_blocks,
+                    block_duration_seconds=(
+                        BLOCK_DURATION_SECONDS
+                    ),
+                )
+            )
+        )
+
+        if should_cancel_generation:
+            generation_cancel_requested = True
+
+            generation_cancelled = (
+                cancel_generation_from_shared_state(
+                    shared_state,
+                    reason=(
+                        "sustained_speech_barge_in"
+                    ),
+                )
+            )
+
             if generation_cancelled:
+                voiced_seconds = (
+                    recorder.voiced_blocks
+                    * BLOCK_DURATION_SECONDS
+                )
+
                 print(
                     "🛑 Active brain generation "
-                    "cancellation requested."
+                    "cancellation requested after "
+                    "sustained speech: "
+                    f"voiced_seconds={voiced_seconds:.2f}"
                 )
 
     try:

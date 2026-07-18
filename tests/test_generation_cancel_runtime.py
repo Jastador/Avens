@@ -8,6 +8,7 @@ from core.generation_cancel import (
 from core.generation_cancel_runtime import (
     cancel_generation_from_shared_state,
     iter_managed_generation,
+    should_cancel_generation_for_voiced_speech,
 )
 
 
@@ -153,6 +154,63 @@ class ManagedGenerationTests(
             controller.has_active_generation
         )
 
+class VoicedSpeechCancellationPolicyTests(
+    unittest.TestCase
+):
+    def test_short_speech_stays_within_grace(
+        self,
+    ):
+        should_cancel = (
+            should_cancel_generation_for_voiced_speech(
+                10,
+                block_duration_seconds=0.05,
+            )
+        )
+
+        self.assertFalse(should_cancel)
+
+    def test_sustained_speech_reaches_threshold(
+        self,
+    ):
+        should_cancel = (
+            should_cancel_generation_for_voiced_speech(
+                11,
+                block_duration_seconds=0.05,
+            )
+        )
+
+        self.assertTrue(should_cancel)
+
+    def test_invalid_block_count_returns_false(
+        self,
+    ):
+        should_cancel = (
+            should_cancel_generation_for_voiced_speech(
+                "not-a-number",
+                block_duration_seconds=0.05,
+            )
+        )
+
+        self.assertFalse(should_cancel)
+
+    def test_non_positive_block_duration_is_rejected(
+        self,
+    ):
+        with self.assertRaises(ValueError):
+            should_cancel_generation_for_voiced_speech(
+                12,
+                block_duration_seconds=0.0,
+            )
+
+    def test_non_positive_minimum_duration_is_rejected(
+        self,
+    ):
+        with self.assertRaises(ValueError):
+            should_cancel_generation_for_voiced_speech(
+                12,
+                block_duration_seconds=0.05,
+                minimum_voiced_seconds=0.0,
+            )
 
 class SharedStateCancellationTests(
     unittest.TestCase
