@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 import unittest
-
+from threading import Event
 from core.generation_worker import (
     GenerationWorker,
     GenerationWorkerEventType,
@@ -182,6 +182,122 @@ class GenerationWorkerTests(
         )
         self.assertFalse(
             worker.is_alive
+        )
+
+    def test_negative_queue_capacity_is_rejected(
+        self,
+    ):
+        with self.assertRaises(ValueError):
+            GenerationWorker(
+                stream_factory=lambda: iter(()),
+                queue_capacity=-1,
+            )
+
+    def test_bounded_queue_applies_backpressure(
+        self,
+    ):
+        second_created = Event()
+        third_created = Event()
+
+        def stream():
+            yield "first"
+
+            second_created.set()
+            yield "second"
+
+            third_created.set()
+            yield "third"
+
+        worker = GenerationWorker(
+            stream_factory=stream,
+            queue_capacity=1,
+        )
+
+        worker.start()
+
+        self.assertTrue(
+            second_created.wait(timeout=1.0)
+        )
+
+        # The producer has obtained the second item but cannot
+        # request the third until queue space becomes available.
+        self.assertFalse(
+            third_created.wait(timeout=0.1)
+        )
+
+        first_event = worker.next_event(
+            timeout=1.0
+        )
+
+        self.assertEqual(
+            first_event.item,
+            "first",
+        )
+
+        self.assertTrue(
+            third_created.wait(timeout=1.0)
+        )
+
+        remaining_events = list(
+            worker.iter_events(
+                poll_timeout=0.01
+            )
+        )
+
+        self.assertEqual(
+            [
+                event.item
+                for event in remaining_events
+                if event.is_item
+            ],
+            [
+                "second",
+                "third",
+            ],
+        )
+
+    def test_stop_releases_blocked_producer_and_closes_stream(
+        self,
+    ):
+        second_created = Event()
+        stream_closed = Event()
+
+        def stream():
+            try:
+                yield "first"
+
+                second_created.set()
+                yield "second"
+
+                while True:
+                    yield "extra"
+            finally:
+                stream_closed.set()
+
+        worker = GenerationWorker(
+            stream_factory=stream,
+            queue_capacity=1,
+        )
+
+        worker.start()
+
+        self.assertTrue(
+            second_created.wait(timeout=1.0)
+        )
+
+        worker.request_stop()
+
+        self.assertTrue(
+            worker.join(timeout=1.0)
+        )
+        self.assertTrue(
+            stream_closed.wait(timeout=1.0)
+        )
+        self.assertTrue(
+            worker.is_stop_requested
+        )
+        self.assertTrue(
+            worker.is_finished
         )
 
     def test_invalid_poll_timeout_is_rejected(

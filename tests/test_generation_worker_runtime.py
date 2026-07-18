@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 import unittest
-
+from threading import Event
 from core.generation_cancel import (
     GenerationCancellationController,
 )
@@ -37,6 +37,10 @@ class ManagedGenerationWorkerTests(
         self.assertEqual(
             worker.thread_name,
             "avens-managed-generation",
+        )
+        self.assertEqual(
+            worker.queue_capacity,
+            1,
         )
 
     def test_custom_thread_name_is_preserved(
@@ -237,6 +241,58 @@ class ManagedGenerationWorkerTests(
         ):
             next(iterator)
 
+        self.assertFalse(
+            controller.has_active_generation
+        )
+
+    def test_closing_background_iterator_stops_worker(
+        self,
+    ):
+        controller = (
+            GenerationCancellationController()
+        )
+        stream_closed = Event()
+
+        def endless_stream(
+            prompt,
+            *,
+            cancellation_token,
+        ):
+            del prompt
+            del cancellation_token
+
+            try:
+                index = 0
+
+                while True:
+                    yield (
+                        "text",
+                        str(index),
+                    )
+                    index += 1
+            finally:
+                stream_closed.set()
+
+        iterator = iter_background_generation(
+            controller,
+            endless_stream,
+            "Hello",
+            poll_timeout=0.01,
+            queue_capacity=1,
+        )
+
+        first_item = next(iterator)
+
+        self.assertEqual(
+            first_item,
+            ("text", "0"),
+        )
+
+        iterator.close()
+
+        self.assertTrue(
+            stream_closed.wait(timeout=1.0)
+        )
         self.assertFalse(
             controller.has_active_generation
         )

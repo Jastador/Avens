@@ -82,6 +82,7 @@ def create_managed_generation_worker(
     thread_name: str = (
         "avens-managed-generation"
     ),
+    queue_capacity: int = 1,
 ) -> GenerationWorker:
     """Create an unstarted worker for one managed brain stream."""
 
@@ -94,6 +95,7 @@ def create_managed_generation_worker(
             )
         ),
         thread_name=thread_name,
+        queue_capacity=queue_capacity,
     )
 
 
@@ -103,6 +105,7 @@ def iter_background_generation(
     prompt: str,
     *,
     poll_timeout: float = 0.05,
+    queue_capacity: int = 1,
 ) -> Iterator[tuple[str, str]]:
     """Yield generation items produced by a background worker.
 
@@ -114,6 +117,7 @@ def iter_background_generation(
         controller,
         stream_factory,
         prompt,
+        queue_capacity=queue_capacity,
     )
 
     worker.start()
@@ -138,6 +142,7 @@ def iter_background_generation(
                 raise error
 
     finally:
+        worker.request_stop()
         worker.join(timeout=1.0)
 
 def cancel_generation_from_shared_state(

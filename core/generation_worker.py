@@ -7,7 +7,7 @@ from collections.abc import (
 )
 from dataclasses import dataclass, field
 from enum import Enum
-from queue import Empty, Queue
+from queue import Empty, Full, Queue
 from threading import Event, Lock, Thread
 from typing import Any
 
@@ -63,10 +63,17 @@ class GenerationWorker:
         "avens-generation-worker"
     )
 
+    queue_capacity: int = 0
+
     _events: Queue[
         GenerationWorkerEvent
     ] = field(
-        default_factory=Queue,
+        init=False,
+        repr=False,
+    )
+
+    _stop_requested: Event = field(
+        default_factory=Event,
         init=False,
         repr=False,
     )
@@ -89,6 +96,16 @@ class GenerationWorker:
         repr=False,
     )
 
+    def __post_init__(self) -> None:
+        if self.queue_capacity < 0:
+            raise ValueError(
+                "queue_capacity cannot be negative."
+            )
+
+        self._events = Queue(
+            maxsize=self.queue_capacity
+        )
+
     @property
     def has_started(self) -> bool:
         with self._start_lock:
@@ -97,6 +114,10 @@ class GenerationWorker:
     @property
     def is_finished(self) -> bool:
         return self._finished.is_set()
+
+    @property
+    def is_stop_requested(self) -> bool:
+        return self._stop_requested.is_set()
 
     @property
     def is_alive(self) -> bool:
@@ -125,12 +146,42 @@ class GenerationWorker:
 
             self._thread.start()
 
+    def request_stop(self) -> None:
+        """Request that the producer stop publishing events."""
+
+        self._stop_requested.set()
+
+    def _publish_event(
+        self,
+        event: GenerationWorkerEvent,
+    ) -> bool:
+        """Publish an event while respecting bounded-queue shutdown."""
+
+        while not self._stop_requested.is_set():
+            try:
+                self._events.put(
+                    event,
+                    timeout=0.05,
+                )
+                return True
+            except Full:
+                continue
+
+        return False
+
     def _run(self) -> None:
+        stream = None
+
         try:
-            stream = self.stream_factory()
+            stream = iter(
+                self.stream_factory()
+            )
 
             for item in stream:
-                self._events.put(
+                if self._stop_requested.is_set():
+                    break
+
+                published = self._publish_event(
                     GenerationWorkerEvent(
                         event_type=(
                             GenerationWorkerEventType
@@ -140,8 +191,11 @@ class GenerationWorker:
                     )
                 )
 
+                if not published:
+                    break
+
         except BaseException as error:
-            self._events.put(
+            self._publish_event(
                 GenerationWorkerEvent(
                     event_type=(
                         GenerationWorkerEventType
@@ -152,7 +206,28 @@ class GenerationWorker:
             )
 
         finally:
-            self._events.put(
+            if stream is not None:
+                close_stream = getattr(
+                    stream,
+                    "close",
+                    None,
+                )
+
+                if callable(close_stream):
+                    try:
+                        close_stream()
+                    except BaseException as error:
+                        self._publish_event(
+                            GenerationWorkerEvent(
+                                event_type=(
+                                    GenerationWorkerEventType
+                                    .ERROR
+                                ),
+                                error=error,
+                            )
+                        )
+
+            self._publish_event(
                 GenerationWorkerEvent(
                     event_type=(
                         GenerationWorkerEventType
@@ -197,6 +272,9 @@ class GenerationWorker:
                     timeout=poll_timeout
                 )
             except Empty:
+                if self.is_finished:
+                    return
+
                 continue
 
             yield event
