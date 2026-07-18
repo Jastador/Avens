@@ -171,6 +171,73 @@ def read_barge_resolution(
         confidence=confidence,
     )
 
+_CAPTURE_FINISHED_STATUSES = frozenset(
+    {
+        "captured",
+        "transcribing",
+        "ready",
+        "error",
+        "idle",
+    }
+)
+
+def wait_for_barge_capture(
+    shared_state,
+    listener_thread,
+    *,
+    timeout_seconds: float = 7.0,
+    poll_seconds: float = 0.02,
+) -> str:
+    """Wait until interruption audio capture has finished.
+
+    Generation consumption pauses during this wait. A bounded worker
+    queue therefore keeps the producer backpressured while sustained
+    speech remains able to cancel the active generation.
+    """
+
+    if timeout_seconds <= 0:
+        raise ValueError(
+            "timeout_seconds must be positive."
+        )
+
+    if poll_seconds <= 0:
+        raise ValueError(
+            "poll_seconds must be positive."
+        )
+
+    deadline = (
+        time.monotonic()
+        + timeout_seconds
+    )
+
+    while True:
+        status = str(
+            shared_state.get(
+                "barge_in_status",
+                "",
+            )
+        ).strip().casefold()
+
+        if status in _CAPTURE_FINISHED_STATUSES:
+            return status
+
+        if not listener_thread.is_alive():
+            return status
+
+        remaining = (
+            deadline
+            - time.monotonic()
+        )
+
+        if remaining <= 0:
+            return status
+
+        listener_thread.join(
+            timeout=min(
+                poll_seconds,
+                remaining,
+            )
+        )
 
 def wait_for_barge_resolution(
     shared_state,

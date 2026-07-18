@@ -262,6 +262,7 @@ def _yield_complete_reply(reply: str):
     if text_buffer.strip():
         yield ("text", text_buffer.strip())
 
+
 def _generation_is_cancelled(
     cancellation_token: (
         GenerationCancellationToken | None
@@ -273,7 +274,6 @@ def _generation_is_cancelled(
         cancellation_token is not None
         and cancellation_token.is_cancelled
     )
-
 
 def _iter_cancellable_lines(
     response,
@@ -290,7 +290,6 @@ def _iter_cancellable_lines(
             return
 
         yield line
-
 
 def _fallback_to_local(
     prompt: str,
@@ -560,7 +559,10 @@ def offline_ai(
 
         response.raise_for_status()
 
-        for line in response.iter_lines():
+        for line in _iter_cancellable_lines(
+            response,
+            cancellation_token,
+        ):
             if not line:
                 continue
 
@@ -632,9 +634,14 @@ def offline_ai(
                     trace_id,
                 )
 
-            full_reply += chunk
-
             for character in chunk:
+                if _generation_is_cancelled(
+                    cancellation_token
+                ):
+                    break
+
+                full_reply += character
+
                 if character == "<" and not in_tag:
                     in_tag = True
                     tag_buffer = "<"
@@ -674,46 +681,46 @@ def offline_ai(
                             yield ("text", text_to_yield)
                             text_buffer = ""
 
-        if _generation_is_cancelled(
-            cancellation_token
-        ):
-            outcome = "cancelled"
+            if _generation_is_cancelled(
+                cancellation_token
+            ):
+                outcome = "cancelled"
 
-            cancellation_reason = (
-                cancellation_token.reason
-                if cancellation_token is not None
-                else "cancelled"
-            )
-
-            print(
-                "🛑 Local brain generation cancelled: "
-                f"reason={cancellation_reason!r}, "
-                f"generated_characters={len(full_reply)}"
-            )
-
-            performance.add_metadata(
-                {
-                    "brain_generation_cancelled": (
-                        True
-                    ),
-                    "brain_generation_cancel_reason": (
-                        cancellation_reason
-                    ),
-                },
-                trace_id,
-            )
-
-            # Retain text already generated so a clarification can
-            # still refer to what Avens actually said.
-            if full_reply.strip():
-                manage_memory(
-                    "assistant",
-                    full_reply.strip(),
+                cancellation_reason = (
+                    cancellation_token.reason
+                    if cancellation_token is not None
+                    else "cancelled"
                 )
-            else:
-                _remove_last_user_turn(prompt)
 
-            return
+                print(
+                    "🛑 Local brain generation cancelled: "
+                    f"reason={cancellation_reason!r}, "
+                    f"generated_characters={len(full_reply)}"
+                )
+
+                performance.add_metadata(
+                    {
+                        "brain_generation_cancelled": (
+                            True
+                        ),
+                        "brain_generation_cancel_reason": (
+                            cancellation_reason
+                        ),
+                    },
+                    trace_id,
+                )
+
+                # Retain text already generated so a clarification can
+                # still refer to what Avens actually said.
+                if full_reply.strip():
+                    manage_memory(
+                        "assistant",
+                        full_reply.strip(),
+                    )
+                else:
+                    _remove_last_user_turn(prompt)
+
+                return
 
         if in_tag and tag_buffer:
             text_buffer += tag_buffer

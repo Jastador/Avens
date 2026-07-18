@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import json
 import unittest
 from types import SimpleNamespace
 from unittest.mock import patch
@@ -7,11 +8,11 @@ from unittest.mock import patch
 from core.brain import (
     _iter_cancellable_lines,
     get_response,
+    offline_ai,
 )
 from core.generation_cancel import (
     GenerationCancellationToken,
 )
-
 
 class FakeStreamingResponse:
     def __init__(
@@ -24,6 +25,10 @@ class FakeStreamingResponse:
         self._after_first_line = (
             after_first_line
         )
+        self.closed = False
+
+    def raise_for_status(self):
+        return None
 
     def iter_lines(self):
         for index, line in enumerate(
@@ -38,6 +43,8 @@ class FakeStreamingResponse:
             ):
                 self._after_first_line()
 
+    def close(self):
+        self.closed = True
 
 class CancellableBrainStreamTests(
     unittest.TestCase
@@ -120,10 +127,103 @@ class CancellableBrainStreamTests(
             [b"first"],
         )
 
-    @patch("core.brain.offline_ai")
+
+    def test_offline_stream_stops_inside_large_chunk_after_yield(
+        self,
+    ):
+        token = GenerationCancellationToken(
+            generation_id=1
+        )
+
+        response = FakeStreamingResponse(
+            [
+                json.dumps(
+                    {
+                        "message": {
+                            "content": (
+                                "First sentence. "
+                                "Second sentence. "
+                                "Third sentence."
+                            ),
+                        },
+                        "done": False,
+                    }
+                ).encode("utf-8")
+            ]
+        )
+
+        isolated_history = [
+            {
+                "role": "system",
+                "content": "Test system prompt",
+            }
+        ]
+
+        with (
+            patch(
+                "core.brain.requests.post",
+                return_value=response,
+            ),
+            patch(
+                "core.brain.load_memory",
+                return_value="",
+            ),
+            patch(
+                "core.brain.get_system_prompt",
+                return_value=(
+                    "Test system prompt"
+                ),
+            ),
+            patch(
+                "core.brain.chat_history",
+                isolated_history,
+            ),
+        ):
+            stream = offline_ai(
+                "Explain something.",
+                cancellation_token=token,
+            )
+
+            first_event = next(stream)
+
+            self.assertEqual(
+                first_event,
+                (
+                    "text",
+                    "First sentence.",
+                ),
+            )
+
+            token.cancel(
+                "test interruption"
+            )
+
+            remaining_events = list(stream)
+
+        self.assertEqual(
+            remaining_events,
+            [],
+        )
+        self.assertTrue(
+            response.closed
+        )
+        self.assertEqual(
+            isolated_history[-1],
+            {
+                "role": "assistant",
+                "content": (
+                    "First sentence."
+                ),
+            },
+        )
+
+    @patch(
+        "core.brain.offline_ai"
+    )
     @patch(
         "core.brain.mode_controller.snapshot"
     )
+
     def test_get_response_forwards_token_to_local_brain(
         self,
         mock_snapshot,
