@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import time
 from collections.abc import Callable, Iterator
 from typing import Any
 
@@ -163,3 +164,58 @@ def cancel_generation_from_shared_state(
         return False
 
     return controller.cancel_active(reason)
+
+def wait_for_generation_idle_from_shared_state(
+    shared_state,
+    *,
+    timeout_seconds: float = 2.0,
+    poll_seconds: float = 0.02,
+) -> bool:
+    """Wait until the shared generation controller has no active stream.
+
+    Returns ``True`` when generation is idle. Returns ``False`` when the
+    controller is missing or the timeout expires.
+    """
+
+    if timeout_seconds <= 0:
+        raise ValueError(
+            "timeout_seconds must be positive."
+        )
+
+    if poll_seconds <= 0:
+        raise ValueError(
+            "poll_seconds must be positive."
+        )
+
+    controller = shared_state.get(
+        "generation_cancel_controller"
+    )
+
+    if not isinstance(
+        controller,
+        GenerationCancellationController,
+    ):
+        return False
+
+    deadline = (
+        time.monotonic()
+        + timeout_seconds
+    )
+
+    while controller.has_active_generation:
+        remaining = (
+            deadline
+            - time.monotonic()
+        )
+
+        if remaining <= 0:
+            return False
+
+        time.sleep(
+            min(
+                poll_seconds,
+                remaining,
+            )
+        )
+
+    return True
